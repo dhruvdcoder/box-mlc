@@ -11,7 +11,7 @@ on:
       - dev/main
 
 jobs:
-  build_docs:
+  build-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
