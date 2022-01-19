@@ -43,21 +43,21 @@ jobs:
         nox --session=${{ matrix.session }}
 
     - name: Combine coverage data and display human readable report
-      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      if: ${{ matrix.session == 'tests' && matrix.python-version == '3.9' && matrix.os == 'ubuntu-latest' }}
       run: |
         nox --force-color --session=coverage
 
     - name: Create coverage report
-      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      if: ${{ matrix.session == 'tests' && matrix.python-version == '3.9' && matrix.os == 'ubuntu-latest' }}
       run: |
         nox --force-color --session=coverage -- xml
 
     - name: Upload coverage report
-      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      if: ${{ matrix.session == 'tests' && matrix.python-version == '3.9' && matrix.os == 'ubuntu-latest' }}
       uses: codecov/codecov-action@v1.5.2
 
     - name: Upload coverage data as artifact
-      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      if: ${{ matrix.session == 'tests' && matrix.python-version == '3.9' && matrix.os == 'ubuntu-latest' }}
       uses: "actions/upload-artifact@v2.2.4"
       with:
         name: coverage-data
