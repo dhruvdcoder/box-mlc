@@ -11,7 +11,6 @@ extensions = [
     "sphinx.ext.graphviz",
     "sphinx.ext.inheritance_diagram",
     "sphinx_click",
-    "m2r",
     "aafigure.sphinxext"
 ]
 source_suffix = [".rst", ".md"]
