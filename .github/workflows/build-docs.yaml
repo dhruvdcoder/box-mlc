@@ -9,9 +9,9 @@ on:
     branches: 
       - main
       - dev/main
-
 jobs:
-  build-docs:
+  builddocs:
+    name: python-${{ matrix.python-version }}
     runs-on: ubuntu-latest 
     steps:
       - uses: actions/checkout@v2
@@ -28,8 +28,7 @@ jobs:
         uses: actions/setup-python@v2.2.2
         with:
           python-version: 3.9
-
-     - name: Install test requirements
+      - name: Install test requirements
         run: |
           pip install -r test_requirements.txt
           pip install -r doc_requirements.txt
@@ -47,7 +46,7 @@ jobs:
         if: ${{github.event_name == 'push'}}
         uses: peaceiris/actions-gh-pages@v3.7.3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GH_TOKEN }}
           publish_dir: ./docs_build
           keep_files: false
           enable_jekyll: false
