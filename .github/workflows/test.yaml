@@ -1,0 +1,64 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Tests
+
+on:
+  push:
+    branches: [ main, dev/main ]
+    paths-ignore: ['docs/**'] # don't run when only docs are changed
+  pull_request:
+    branches: [ main, dev/main ]
+    paths-ignore: ['docs/**']
+
+jobs:
+  tests:
+    name: ${{ matrix.session }}-${{ matrix.python-version }}-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        session:
+          - tests
+          - xdoctest
+        python-version: ['3.7', '3.8', '3.9']
+        os: ['macos-latest', 'ubuntu-latest']
+      fail-fast: true
+    env:
+      NOXSESSION: ${{ matrix.session }}
+
+    steps:
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2.2.2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install test requirements
+      run: |
+        pip install -r test_requirements.txt
+        pip install -r doc_requirements.txt
+
+    - name: Run tests
+      run: |
+        nox --session=${{ matrix.session }}
+
+    - name: Combine coverage data and display human readable report
+      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      run: |
+        nox --force-color --session=coverage
+
+    - name: Create coverage report
+      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      run: |
+        nox --force-color --session=coverage -- xml
+
+    - name: Upload coverage report
+      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      uses: codecov/codecov-action@v1.5.2
+
+    - name: Upload coverage data as artifact
+      if: ${{ matrix.session == "tests" && matrix.python-version == "3.9" && matrix.os == "ubuntu-latest" }}
+      uses: "actions/upload-artifact@v2.2.4"
+      with:
+        name: coverage-data
+        path: ".coverage.*"
