@@ -14,42 +14,42 @@ jobs:
   build_docs:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    # we will need the complete history.
-    # checkout@v2 will fetch only last commit
-    # So we fetch all
-    # checkout@v2 will leave git in a detached head state
-    # Hence, we need to temporarily create a branch.
-    # NOTE: we cannot push this brach
-    - run: |
-          git switch -c "temp-branch-for-docs"
-          git fetch --prune --unshallow --tags
-    - name: Set up Python
-      uses: actions/setup-python@v2.2.2
-      with:
-        python-version: 3.9
+      - uses: actions/checkout@v2
+      # we will need the complete history.
+      # checkout@v2 will fetch only last commit
+      # So we fetch all
+      # checkout@v2 will leave git in a detached head state
+      # Hence, we need to temporarily create a branch.
+      # NOTE: we cannot push this brach
+      - run: |
+            git switch -c "temp-branch-for-docs"
+            git fetch --prune --unshallow --tags
+      - name: Set up Python
+        uses: actions/setup-python@v2.2.2
+        with:
+          python-version: 3.9
 
-   - name: Install test requirements
-      run: |
-        pip install -r test_requirements.txt
-        pip install -r doc_requirements.txt
+     - name: Install test requirements
+        run: |
+          pip install -r test_requirements.txt
+          pip install -r doc_requirements.txt
 
-    - name: Build Docs
-      run: |
-        nox --force-color --session=docs-build
-    - name: Upload html doc as Artifact
-      uses: actions/upload-artifact@v2.2.4
-      with:
-        name: docs
-        path: docs/_build
-    - name: Deploy Docs
-      # deploy only after merge
-      if: ${{github.event_name == 'push'}}
-      uses: peaceiris/actions-gh-pages@v3.7.3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./docs_build
-        keep_files: false
-        enable_jekyll: false
-        force_orphan: true
-        publish_branch: gh-pages
+      - name: Build Docs
+        run: |
+          nox --force-color --session=docs-build
+      - name: Upload html doc as Artifact
+        uses: actions/upload-artifact@v2.2.4
+        with:
+          name: docs
+          path: docs/_build
+      - name: Deploy Docs
+        # deploy only after merge
+        if: ${{github.event_name == 'push'}}
+        uses: peaceiris/actions-gh-pages@v3.7.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs_build
+          keep_files: false
+          enable_jekyll: false
+          force_orphan: true
+          publish_branch: gh-pages
