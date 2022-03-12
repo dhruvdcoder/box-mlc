@@ -1,0 +1,54 @@
+command:
+- ${program}
+- train-with-wandb
+- --include-package=multilabel_learning
+- model_configs2/general_mbm.jsonnet
+- --wandb-tags=dataset@cellcycle_fun,metric@MAP,model@mbm
+- --file-friendly-logging
+- ${args}
+early_terminate:
+  min_iter: 20
+  type: hyperband
+method: bayes
+metric:
+  goal: maximize
+  name: validation/best_MAP
+name: cellcycle_fun_mbm
+parameters:
+  env.dataset_name:
+    value: cellcycle_fun
+  data_loader.batch_size:
+    values:
+    - 16
+    - 4
+  env.box_weight_decay:
+    values:
+    - 0.001
+    - 0.0001
+    - 0.0
+  env.label_delta_init:
+    values:
+    - 0.1
+    - 0.01
+    - 1.0
+  env.ff_hidden:
+    values:
+    - 1000
+    - 500
+  env.ff_linear_layers:
+    values:
+    - 2
+    - 3
+  env.ff_weight_decay:
+    value: 0.001
+  env.lr_encoder:
+    values:
+    - 0.00001
+    - 0.0001
+    - 0.001
+  env.lr_ratio:
+    values:
+    - 1
+    - 10
+    - 0.1
+program: allennlp

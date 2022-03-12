@@ -1,0 +1,63 @@
+command:
+- ${program}
+- train-with-wandb
+- --include-package=box_mlc
+- model_configs2/general_mbm.jsonnet
+- --wandb-tags=dataset@expr_fun,metric@MAP,model@alanbaseline
+- --file-friendly-logging
+- ${args}
+early_terminate:
+  min_iter: 20
+  type: hyperband
+method: grid
+metric:
+  goal: maximize
+  name: validation/best_MAP
+name: expr_fun
+parameters:
+  env.dataset_name:
+    value: expr_fun
+  data_loader.batch_size:
+    value: 4
+  env.box_weight_decay:
+    values:
+    - 0.0
+  env.label_delta_init:
+    values:
+    - 0.1
+    - 0.01
+    - 1.0
+  env.gumbel_beta:
+    values:
+    - 0.00001
+    - 0.001
+  env.ff_hidden:
+    values:
+    - 1750
+    - 1000
+    - 500
+  env.ff_dropout:
+    values:
+    - 0
+  env.ff_activation:
+    value: 'softplus'
+  env.ff_linear_layers:
+    values:
+    - 2
+    - 3
+  env.ff_weight_decay:
+    values:
+    - 0.0001
+    - 0.001
+    - 0.01
+  env.lr_encoder:
+    values:
+    - 0.00001
+    - 0.0001
+    - 0.001
+  env.volume_temp:
+    values:
+    - 0.05
+    - 0.1
+    - 0.5
+program: allennlp
