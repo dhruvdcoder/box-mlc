@@ -102,7 +102,7 @@ class BoxVisualizer:
     vocab: List[str]
     y_boxes: Dict[str, Tuple[Tensor, Tensor]]     # Maps label to y_box
     total_dims: int                                      # Dimensionality of boxes
-    axis_lims: List[float] = [None]*4
+    ax_lims: List[float] = [None] * 4
 
     def __init__(
             self,
@@ -212,7 +212,7 @@ class BoxVisualizer:
 
         """
         logger.info("Visualizing...")
-        ax_lims = self.axis_lims
+        ax_lims = self.ax_lims
 
         if label_recursive:
             labels = list(filter(lambda l: label_recursive.startswith(l), self.vocab))
@@ -235,11 +235,15 @@ class BoxVisualizer:
             get_preds = lambda: self._filter_by_recursive_label(self.predictions, label_recursive, x_lim)
         else:
             labels = self.vocab
-            get_preds = lambda: self.predictions
-
-            _color_map = plt.cm.get_cmap(color_map, max([len(label) for label in labels]))
+            get_preds = lambda: self.predictions[:x_lim] if x_lim is not None else self.predictions
+            max_label_len = max([len(label) for label in labels])
 
             def get_color(label: str):
+                if color_map:
+                    map_name = color_map
+                else:
+                    map_name = DEFAULT_COLOR_MAPS[hash(label.split('.')[0]) % len(DEFAULT_COLOR_MAPS)]
+                _color_map = plt.cm.get_cmap(map_name, max_label_len)
                 return _color_map(len(label))
 
             def get_x_label(pred):
@@ -262,22 +266,6 @@ class BoxVisualizer:
             axes = axes.flatten()
             self.axes = axes
 
-        for pred in tqdm(get_preds(), unit='x_boxes'):
-            x_box = pred["x_box"]
-            for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
-
-                x, y = box_to_point(x_box, x_dim, y_dim)
-                ax.scatter(x, y, color=get_color(get_x_label(pred)))
-
-                if ax_lims[0] is None or x > ax_lims[0]:
-                    ax_lims[0] = x
-                elif ax_lims[1] is None or x < ax_lims[1]:
-                    ax_lims[1] = x
-                if ax_lims[2] is None or y > ax_lims[2]:
-                    ax_lims[2] = y
-                elif ax_lims[3] is None or y < ax_lims[3]:
-                    ax_lims[3] = y
-
         # Plot y boxes
         if plot_y_boxes:
             for label in tqdm(labels, unit='y_boxes'):
@@ -288,35 +276,52 @@ class BoxVisualizer:
                     rect.set_edgecolor(get_color(label))
                     ax.add_patch(rect)
 
-                    if ax_lims[1] is None or y_box[0][x_dim] < ax_lims[1]:
-                        ax_lims[1] = y_box[0][x_dim]
-                    elif ax_lims[0] is None or y_box[1][x_dim] > ax_lims[0]:
-                        ax_lims[0] = y_box[1][x_dim]
-                    if ax_lims[3] is None or y_box[0][y_dim] < ax_lims[3]:
-                        ax_lims[3] = y_box[0][y_dim]
-                    elif ax_lims[2] is None or y_box[1][y_dim] > ax_lims[2]:
-                        ax_lims[2] = y_box[1][y_dim]
+                    if ax_lims[0] is None or y_box[0][x_dim] < ax_lims[0]:
+                        ax_lims[0] = y_box[0][x_dim]
+                    if ax_lims[1] is None or y_box[1][x_dim] > ax_lims[1]:
+                        ax_lims[1] = y_box[1][x_dim]
+                    if ax_lims[2] is None or y_box[0][y_dim] < ax_lims[2]:
+                        ax_lims[2] = y_box[0][y_dim]
+                    if ax_lims[3] is None or y_box[1][y_dim] > ax_lims[3]:
+                        ax_lims[3] = y_box[1][y_dim]
 
-        self.axis_lims = ax_lims
+        # Plot x boxes as points
+        for pred in tqdm(get_preds(), unit='x_boxes'):
+            x_box = pred["x_box"]
+            for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
+
+                x, y = box_to_point(x_box, x_dim, y_dim)
+                ax.scatter(x, y, color=get_color(get_x_label(pred)))
+
+                if ax_lims[0] is None or x < ax_lims[0]:
+                    ax_lims[0] = x
+                elif ax_lims[1] is None or x > ax_lims[1]:
+                    ax_lims[1] = x
+                if ax_lims[2] is None or y < ax_lims[2]:
+                    ax_lims[2] = y
+                elif ax_lims[3] is None or y > ax_lims[3]:
+                    ax_lims[3] = y
+
+        self.ax_lims = ax_lims
 
         for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
             ax.title.set_text(f"({x_dim}, {y_dim})")
 
         if show_plot:
-            for ax in self.axes:
-                ax.set_xlim([ax_lims[1]-0.1, ax_lims[0]+0.1])
-                ax.set_ylim([ax_lims[3]-0.1, ax_lims[2]+0.1])
             self.show_plot()
 
     def clear(self):
         plt.clf()
+        self.ax_lims = [None] * 4
         if self.axes is not None:
             del self.axes
             self.axes = None
-        if self.axis_lims is not None:
-            self.axis_lims = [None]*4
 
     def show_plot(self):
+        ax_lims = self.ax_lims
+        for ax in self.axes:
+            ax.set_xlim([ax_lims[0] - 0.1, ax_lims[1] + 0.1])
+            ax.set_ylim([ax_lims[2] - 0.1, ax_lims[3] + 0.1])
         plt.show()
         self.clear()
 
@@ -373,64 +378,63 @@ if __name__ == "__main__":
     #
     # visualizer.show_plot()
 
-    # %%
+    # %% all y_boxes
     visualizer.visualize(
-        x_lim=0,
+        x_lim=None,
         # label_recursive='02.16.03',
-        plot_y_boxes=True,
-        color_map='Greens'
+        plot_y_boxes=True
     )
 
     visualizer.show_plot()
 
     # %% Two class y_boxes
-    visualizer = BoxVisualizer(
-        '/home/asempruch/boxem/box-mlc/temp_',
-        dims=range(1500, 1503)
-    )
-    visualizer.visualize(
-        x_lim=30,
-        label_recursive='10.03.02',
-        plot_y_boxes=True,
-        auto_dims=6,
-        color_map='Reds'
-    )
-
-    visualizer.visualize(
-        x_lim=30,
-        label_recursive='11.04.01',
-        plot_y_boxes=True,
-        color_map='Greens'
-    )
-
-    visualizer.show_plot()
-
-    # %% Three class one y_box
-    visualizer = BoxVisualizer(
-        '/home/asempruch/boxem/box-mlc/temp_',
-        dims=range(1500, 1503)
-    )
-    visualizer.visualize(
-        x_lim=30,
-        label_recursive='20.01.01.01.01.02',
-        plot_y_boxes=True,
-        auto_dims=6,
-        color_map='Reds'
-    )
-
-    visualizer.visualize(
-        x_lim=30,
-        label_recursive='02.16.03',
-        color_map='Greens'
-    )
-
-    visualizer.visualize(
-        x_lim=30,
-        label_recursive='01.01.03.05.02',
-        color_map='Blues'
-    )
-
-    visualizer.show_plot()
+    # visualizer = BoxVisualizer(
+    #     '/home/asempruch/boxem/box-mlc/temp_',
+    #     dims=range(1500, 1503)
+    # )
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='10.03.02',
+    #     plot_y_boxes=True,
+    #     auto_dims=6,
+    #     color_map='Reds'
+    # )
+    #
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='11.04.01',
+    #     plot_y_boxes=True,
+    #     color_map='Greens'
+    # )
+    #
+    # visualizer.show_plot()
+    #
+    # # %% Three class one y_box
+    # visualizer = BoxVisualizer(
+    #     '/home/asempruch/boxem/box-mlc/temp_',
+    #     dims=range(1500, 1503)
+    # )
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='20.01.01.01.01.02',
+    #     plot_y_boxes=True,
+    #     auto_dims=6,
+    #     color_map='Reds'
+    # )
+    #
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='02.16.03',
+    #     color_map='Greens'
+    # )
+    #
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='01.01.03.05.02',
+    #     color_map='Blues'
+    # )
+    #
+    # visualizer.show_plot()
 
     # TODO: intelligently select dimensions based on variance in x box score (intersection)
     # you'll need a custom intersection function that allows you to compute in single dimsions, this will give you the
