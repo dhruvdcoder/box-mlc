@@ -1,8 +1,12 @@
 import json
 import logging
-from typing import List, Tuple, Iterable, Set, Dict, Any, Generator, Optional
+from typing import List, Tuple, Iterable, Set, Dict, Any, Generator, Optional, Callable
 from numpy.typing import NDArray
 
+from box_embeddings.parameterizations.box_tensor import BoxTensor
+from box_embeddings.modules.intersection import Intersection, GumbelIntersection
+from box_embeddings.modules.volume import Volume, HardVolume, SoftVolume
+from torch import Tensor
 from allennlp.models.archival import load_archive
 from allennlp.predictors.predictor import Predictor
 from allennlp.common.util import import_module_and_submodules
@@ -65,14 +69,40 @@ def iter_dim_pairs(
         axes_idx += 1
 
 
+def get_dim_variance(
+        x_boxes: List[Tuple[Tensor, Tensor]],
+        y_boxes: List[Tuple[Tensor, Tensor]],
+        intersection: Intersection = GumbelIntersection(),
+        volume: Volume = HardVolume()
+) -> NDArray:
+    total_dims = y_boxes[0][0].shape[0]
+    variance_by_dim = np.zeros(total_dims)
+    for dim in tqdm(range(total_dims), desc='Finding highest variance dims', unit='dims'):
+        variance_by_x_box = np.zeros(len(x_boxes))
+        for x_idx, (x_box_z, x_box_Z) in enumerate(x_boxes):
+            score_per_label = np.zeros(len(y_boxes))
+            for y_idx, (y_box_z, y_box_Z) in enumerate(y_boxes):
+                x_box = BoxTensor((x_box_z[dim:dim + 1], x_box_Z[dim:dim + 1]))
+                y_box = BoxTensor((y_box_z[dim:dim + 1], y_box_Z[dim:dim + 1]))
+
+                inter_box = intersection(x_box, y_box)
+                score_per_label[y_idx] = volume(inter_box)
+
+            variance_by_x_box[x_idx] = score_per_label.var()
+        variance_by_dim[dim] = variance_by_x_box.mean()
+
+    return variance_by_dim
+
+
 class BoxVisualizer:
 
     predictions: List[dict] = None
     axes: np.typing.NDArray = None
     dims: List[int] = None
     vocab: List[str]
-    y_boxes: Dict[str, Tuple[List[float], List[float]]]     # Maps label to y_box
-    total_dims: int                                         # Dimensionality of boxes
+    y_boxes: Dict[str, Tuple[Tensor, Tensor]]     # Maps label to y_box
+    total_dims: int                                      # Dimensionality of boxes
+    axis_lims: List[float] = [None]*4
 
     def __init__(
             self,
@@ -133,8 +163,8 @@ class BoxVisualizer:
             y_boxes: List[Tuple[List, List]] = []
             for x in tqdm(data, desc="predicting"):
                 r = self.predictor.predict_instance(x)
-                x_box_z = tensor(r["x_boxes_z"])
-                x_box_Z = tensor(r["x_boxes_Z"])
+                x_box_z = Tensor(r["x_boxes_z"])
+                x_box_Z = Tensor(r["x_boxes_Z"])
                 predictions.append(
                     {
                         "label_scores": r["scores"],
@@ -145,7 +175,7 @@ class BoxVisualizer:
                 )
                 if not y_boxes:
                     for y_box_z, y_box_Z in zip(r["y_boxes_z"], r["y_boxes_Z"]):
-                        y_boxes.append((tensor(y_box_z), tensor(y_box_Z)))
+                        y_boxes.append((Tensor(y_box_z), Tensor(y_box_Z)))
             with open(self.rundir + "/box_vis_predictions.pkl", 'wb') as f:
                 pickle.dump(predictions, f)
             with open(self.rundir + "/box_vis_y_boxes.pkl", 'wb') as f:
@@ -161,6 +191,7 @@ class BoxVisualizer:
             self,
             dims: Iterable[int]
     ):
+        self.clear()
         self.dims = list(dims)
 
     def visualize(
@@ -181,16 +212,8 @@ class BoxVisualizer:
 
         """
         logger.info("Visualizing...")
-        num_graphs = int(np.ceil((len(self.dims) + 1)/2))
+        ax_lims = self.axis_lims
 
-        if self.axes is None:
-            fig: Figure
-            axes: NDArray
-            fig, axes = plt.subplots(num_graphs, 1, figsize=(6, num_graphs*6), squeeze=False)
-            axes = axes.flatten()
-            self.axes = axes
-
-        max_x, max_y, min_x, min_y = None, None, None, None
         if label_recursive:
             labels = list(filter(lambda l: label_recursive.startswith(l), self.vocab))
 
@@ -209,26 +232,51 @@ class BoxVisualizer:
                         max_overlap_label = true_label
                 return max_overlap_label
 
-            preds = self._filter_by_recursive_label(self.predictions, label_recursive, x_lim)
+            get_preds = lambda: self._filter_by_recursive_label(self.predictions, label_recursive, x_lim)
         else:
             labels = self.vocab
-            preds = self.predictions
+            get_preds = lambda: self.predictions
 
-        for pred in tqdm(preds, unit='x_boxes'):
+            _color_map = plt.cm.get_cmap(color_map, max([len(label) for label in labels]))
+
+            def get_color(label: str):
+                return _color_map(len(label))
+
+            def get_x_label(pred):
+                return pred['true_labels'][0]
+
+        if auto_dims:
+            top_dims = self.find_highest_variance_dims(
+                x_boxes=[pred['x_box'] for pred in get_preds()],
+                y_boxes=[self.y_boxes[label] for label in labels],
+                top_k=auto_dims
+            )
+            self.set_dims(top_dims)
+
+        num_graphs = int(np.ceil((len(self.dims) + 1)/2))
+
+        if self.axes is None:
+            fig: Figure
+            axes: NDArray
+            fig, axes = plt.subplots(num_graphs, 1, figsize=(6, num_graphs*6), squeeze=False)
+            axes = axes.flatten()
+            self.axes = axes
+
+        for pred in tqdm(get_preds(), unit='x_boxes'):
             x_box = pred["x_box"]
             for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
 
                 x, y = box_to_point(x_box, x_dim, y_dim)
                 ax.scatter(x, y, color=get_color(get_x_label(pred)))
 
-                if max_x is None or x > max_x:
-                    max_x = x
-                elif min_x is None or x < min_x:
-                    min_x = x
-                if max_y is None or y > max_y:
-                    max_y = y
-                elif min_y is None or y < min_y:
-                    min_y = y
+                if ax_lims[0] is None or x > ax_lims[0]:
+                    ax_lims[0] = x
+                elif ax_lims[1] is None or x < ax_lims[1]:
+                    ax_lims[1] = x
+                if ax_lims[2] is None or y > ax_lims[2]:
+                    ax_lims[2] = y
+                elif ax_lims[3] is None or y < ax_lims[3]:
+                    ax_lims[3] = y
 
         # Plot y boxes
         if plot_y_boxes:
@@ -240,33 +288,49 @@ class BoxVisualizer:
                     rect.set_edgecolor(get_color(label))
                     ax.add_patch(rect)
 
-                    if y_box[0][x_dim] < min_x:
-                        min_x = y_box[0][x_dim]
-                    elif y_box[1][x_dim] > max_x:
-                        max_x = y_box[1][x_dim]
-                    if y_box[0][y_dim] < min_y:
-                        min_y = y_box[0][y_dim]
-                    elif y_box[1][y_dim] > max_y:
-                        max_y = y_box[1][y_dim]
+                    if ax_lims[1] is None or y_box[0][x_dim] < ax_lims[1]:
+                        ax_lims[1] = y_box[0][x_dim]
+                    elif ax_lims[0] is None or y_box[1][x_dim] > ax_lims[0]:
+                        ax_lims[0] = y_box[1][x_dim]
+                    if ax_lims[3] is None or y_box[0][y_dim] < ax_lims[3]:
+                        ax_lims[3] = y_box[0][y_dim]
+                    elif ax_lims[2] is None or y_box[1][y_dim] > ax_lims[2]:
+                        ax_lims[2] = y_box[1][y_dim]
+
+        self.axis_lims = ax_lims
 
         for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
             ax.title.set_text(f"({x_dim}, {y_dim})")
 
-        for ax in self.axes:
-            ax.set_xlim([min_x-0.1, max_x+0.1])
-            ax.set_ylim([min_y-0.1, max_y+0.1])
-
         if show_plot:
+            for ax in self.axes:
+                ax.set_xlim([ax_lims[1]-0.1, ax_lims[0]+0.1])
+                ax.set_ylim([ax_lims[3]-0.1, ax_lims[2]+0.1])
             self.show_plot()
 
-    def clf(self):
+    def clear(self):
         plt.clf()
-        del self.axes
-        self.axes = None
+        if self.axes is not None:
+            del self.axes
+            self.axes = None
+        if self.axis_lims is not None:
+            self.axis_lims = [None]*4
 
     def show_plot(self):
         plt.show()
-        self.clf()
+        self.clear()
+
+    @staticmethod
+    def find_highest_variance_dims(
+            x_boxes: List[Tuple[Tensor, Tensor]],
+            y_boxes: List[Tuple[Tensor, Tensor]],
+            intersection: Intersection = GumbelIntersection(),
+            volume: Volume = HardVolume(),
+            top_k: Optional[int] = 0
+    ):
+        variance_by_dim = get_dim_variance(x_boxes, y_boxes, intersection, volume)
+        top_k = variance_by_dim.argsort()[-top_k:]
+        return np.flip(top_k)
 
     @staticmethod
     def _filter_by_recursive_label(
@@ -286,54 +350,113 @@ class BoxVisualizer:
                     yield pred
 
 
-# %%
-visualizer = BoxVisualizer(
-    '/home/asempruch/boxem/box-mlc/temp_',
-    dims=range(1500, 1503)
-)
-# %%
+if __name__ == "__main__":
+    # %% Two class y_boxes
+    visualizer = BoxVisualizer(
+        '/home/asempruch/boxem/box-mlc/temp_',
+        dims=range(1500, 1503)
+    )
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='20.01.01.01.01.02',
+    #     plot_y_boxes=True,
+    #     auto_dims=6,
+    #     color_map='Reds'
+    # )
+    #
+    # visualizer.visualize(
+    #     x_lim=30,
+    #     label_recursive='02.16.03',
+    #     plot_y_boxes=True,
+    #     color_map='Greens'
+    # )
+    #
+    # visualizer.show_plot()
 
-# with open('_temp_predictions.pkl', 'rb') as f:
-#     _predictions = pickle.load(f)
-# visualizer.predictions = _predictions
-#
-# visualizer.get_predictions()
-#
-# with open('_temp_y_boxes.pkl', 'rb') as f:
-#     _y_boxes = pickle.load(f)
-# visualizer.y_boxes = _y_boxes
-#
-# visualizer.total_dims = 1750
-# dims = (1000, 1001)
-# dims = range(1500, 1502)
+    # %%
+    visualizer.visualize(
+        x_lim=0,
+        # label_recursive='02.16.03',
+        plot_y_boxes=True,
+        color_map='Greens'
+    )
 
-# visualizer.set_dims(dims)
+    visualizer.show_plot()
 
-visualizer.visualize(
-    x_lim=30,
-    label_recursive='01.01.03.05.02'
-)
+    # %% Two class y_boxes
+    visualizer = BoxVisualizer(
+        '/home/asempruch/boxem/box-mlc/temp_',
+        dims=range(1500, 1503)
+    )
+    visualizer.visualize(
+        x_lim=30,
+        label_recursive='10.03.02',
+        plot_y_boxes=True,
+        auto_dims=6,
+        color_map='Reds'
+    )
 
-visualizer.visualize(
-    x_lim=30,
-    # label_recursive='01.01.05.01',
-    label_recursive='20.01.01.01.01.02',
-    plot_y_boxes=True,
-    show_plot=True
-)
+    visualizer.visualize(
+        x_lim=30,
+        label_recursive='11.04.01',
+        plot_y_boxes=True,
+        color_map='Greens'
+    )
 
-# visualizer.visualize(
-#     dimensions=(100, 101),
-#     x_lim=30,
-#     label_recursive='01.01.03.05.02',
-# )
-#
-# visualizer.visualize(
-#     dimensions=(200, 201),
-#     x_lim=30,
-#     label_recursive='01.01.03.05.02',
-# )
-# visualizer.visualize(label_recursive='01.01.03.05.02', x_lim=5)
+    visualizer.show_plot()
 
-# Find target samples where labels belong to what we want, multiple on each subplot
-# Use supblot that contains each pair of dimensions, 2 per figure
+    # %% Three class one y_box
+    visualizer = BoxVisualizer(
+        '/home/asempruch/boxem/box-mlc/temp_',
+        dims=range(1500, 1503)
+    )
+    visualizer.visualize(
+        x_lim=30,
+        label_recursive='20.01.01.01.01.02',
+        plot_y_boxes=True,
+        auto_dims=6,
+        color_map='Reds'
+    )
+
+    visualizer.visualize(
+        x_lim=30,
+        label_recursive='02.16.03',
+        color_map='Greens'
+    )
+
+    visualizer.visualize(
+        x_lim=30,
+        label_recursive='01.01.03.05.02',
+        color_map='Blues'
+    )
+
+    visualizer.show_plot()
+
+    # TODO: intelligently select dimensions based on variance in x box score (intersection)
+    # you'll need a custom intersection function that allows you to compute in single dimsions, this will give you the
+    # score and the metric you should be measuring variance in
+
+    # %%
+    # x = visualizer.predictions[100]['x_box']
+    # y = visualizer.y_boxes['14']
+    # xb = BoxTensor(x)
+    # yb = BoxTensor(y)
+    #
+    # intersection = GumbelIntersection()(xb, yb)
+    # HardVolume()(intersection)
+    # SoftVolume()(intersection)
+    # visualizer.visualize(
+    #     dimensions=(100, 101),
+    #     x_lim=30,
+    #     label_recursive='01.01.03.05.02',
+    # )
+    #
+    # visualizer.visualize(
+    #     dimensions=(200, 201),
+    #     x_lim=30,
+    #     label_recursive='01.01.03.05.02',
+    # )
+    # visualizer.visualize(label_recursive='01.01.03.05.02', x_lim=5)
+
+    # Find target samples where labels belong to what we want, multiple on each subplot
+    # Use supblot that contains each pair of dimensions, 2 per figure
