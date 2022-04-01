@@ -5,7 +5,7 @@ from numpy.typing import NDArray
 
 from box_embeddings.parameterizations.box_tensor import BoxTensor
 from box_embeddings.modules.intersection import Intersection, GumbelIntersection
-from box_embeddings.modules.volume import Volume, HardVolume, SoftVolume
+from box_embeddings.modules.volume import Volume, HardVolume, SoftVolume, BesselApproxVolume
 from torch import Tensor
 from allennlp.models.archival import load_archive
 from allennlp.predictors.predictor import Predictor
@@ -30,7 +30,7 @@ DEFAULT_COLOR_MAPS = ['Purples', 'Blues', 'Greens', 'Reds',
                       'GnBu', 'PuBu', 'PuBuGn', 'BuGn']
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger("box_vis")
+logger = logging.getLogger("box_vis BoxVisualizer")
 
 
 def box_to_rectangle(box: tuple, x_dim: int, y_dim: int) -> Rectangle:
@@ -73,20 +73,25 @@ def get_dim_variance(
         x_boxes: List[Tuple[Tensor, Tensor]],
         y_boxes: List[Tuple[Tensor, Tensor]],
         intersection: Intersection = GumbelIntersection(),
-        volume: Volume = HardVolume()
+        volume: Volume = SoftVolume()
 ) -> NDArray:
     total_dims = y_boxes[0][0].shape[0]
     variance_by_dim = np.zeros(total_dims)
-    for dim in tqdm(range(total_dims), desc='Finding highest variance dims', unit='dims'):
+    for dim in tqdm(range(total_dims), desc='Calculating intersection volume variance by dim', unit='dims'):
         variance_by_x_box = np.zeros(len(x_boxes))
         for x_idx, (x_box_z, x_box_Z) in enumerate(x_boxes):
             score_per_label = np.zeros(len(y_boxes))
             for y_idx, (y_box_z, y_box_Z) in enumerate(y_boxes):
                 x_box = BoxTensor((x_box_z[dim:dim + 1], x_box_Z[dim:dim + 1]))
                 y_box = BoxTensor((y_box_z[dim:dim + 1], y_box_Z[dim:dim + 1]))
-
                 inter_box = intersection(x_box, y_box)
                 score_per_label[y_idx] = volume(inter_box)
+                # if score_per_label[y_idx].item() != -29.93360710144043:
+                #     print("Got different volume:", score_per_label[y_idx].item())
+
+                # z_distance = np.abs(x_box_z[dim] - y_box_z[dim])
+                # Z_distance = np.abs(x_box_Z[dim] - y_box_Z[dim])
+                # score_per_label[y_idx] = np.mean((z_distance.item(), Z_distance.item()))
 
             variance_by_x_box[x_idx] = score_per_label.var()
         variance_by_dim[dim] = variance_by_x_box.mean()
@@ -100,6 +105,7 @@ class BoxVisualizer:
     axes: np.typing.NDArray = None
     dims: List[int] = None
     vocab: List[str]
+    vocab_idx: Dict[str, int]
     y_boxes: Dict[str, Tuple[Tensor, Tensor]]     # Maps label to y_box
     total_dims: int                                      # Dimensionality of boxes
     ax_lims: List[float] = [None] * 4
@@ -127,6 +133,7 @@ class BoxVisualizer:
         # Load labels
         with open(vocab_file+"/labels.txt") as f:
             self.vocab = [label.strip() for label in f]
+            self.vocab_idx = {label: idx for idx, label in enumerate(self.vocab)}
             # self.vocab = {label.strip(): idx for idx, label in enumerate(f)}
 
         # Load archive
@@ -253,7 +260,9 @@ class BoxVisualizer:
             top_dims = self.find_highest_variance_dims(
                 x_boxes=[pred['x_box'] for pred in get_preds()],
                 y_boxes=[self.y_boxes[label] for label in labels],
-                top_k=auto_dims
+                top_k=auto_dims,
+                intersection=self.predictor._model._intersect,
+                volume=self.predictor._model._volume
             )
             self.set_dims(top_dims)
 
@@ -330,10 +339,22 @@ class BoxVisualizer:
             x_boxes: List[Tuple[Tensor, Tensor]],
             y_boxes: List[Tuple[Tensor, Tensor]],
             intersection: Intersection = GumbelIntersection(),
-            volume: Volume = HardVolume(),
+            volume: Volume = BesselApproxVolume(),
             top_k: Optional[int] = 0
     ):
         variance_by_dim = get_dim_variance(x_boxes, y_boxes, intersection, volume)
+
+        sorted_variance_idx = variance_by_dim.argsort()
+        # plt.bar(
+        #     range(len(sorted_variance_idx)),
+        #     [variance_by_dim[idx] for idx in sorted_variance_idx[::-1]],
+        # )
+        plt.bar(
+            range(len(sorted_variance_idx)),
+            variance_by_dim,
+        )
+        plt.show()
+
         top_k = variance_by_dim.argsort()[-top_k:]
         return np.flip(top_k)
 
@@ -358,9 +379,35 @@ class BoxVisualizer:
 if __name__ == "__main__":
     # %% Two class y_boxes
     visualizer = BoxVisualizer(
-        '/home/asempruch/boxem/box-mlc/temp_',
-        dims=range(1500, 1503)
+        '/mnt/nfs/scratch1/asempruch/1750',
+        dims=range(0, 4)
     )
+    # visualizer.compute_error([-3.0, -2.9, -2.8])
+
+    # %% Plot label scores
+    buckets = {val: 0 for val in np.arange(-16, 0, 0.1)}
+    all_label_scores = list()
+    for pred in visualizer.predictions:
+        for label_score in pred['label_scores']:
+            for key in reversed(buckets.keys()):
+                if label_score > key:
+                    buckets[key] += 1
+                    break
+    # %%
+    plt.clf()
+    plt.rcParams['figure.dpi'] = 500
+    plt.bar(buckets.keys(), buckets.values(), width=0.05)
+    plt.xticks(
+        [round(val, 2) for val in buckets.keys()],
+        rotation=90,
+        fontsize=2
+    )
+    # all_label_scores += pred['label_scores']
+    # print(len(all_label_scores))
+    plt.bar(range(len(all_label_scores)), sorted(all_label_scores))
+    plt.show()
+
+    # %%
     # visualizer.visualize(
     #     x_lim=30,
     #     label_recursive='20.01.01.01.01.02',
@@ -368,24 +415,25 @@ if __name__ == "__main__":
     #     auto_dims=6,
     #     color_map='Reds'
     # )
-    #
+
     # visualizer.visualize(
     #     x_lim=30,
     #     label_recursive='02.16.03',
     #     plot_y_boxes=True,
+    #     auto_dims=6,
     #     color_map='Greens'
     # )
-    #
+
     # visualizer.show_plot()
 
     # %% all y_boxes
-    visualizer.visualize(
-        x_lim=None,
-        # label_recursive='02.16.03',
-        plot_y_boxes=True
-    )
+    # visualizer.visualize(
+    #     x_lim=None,
+    #     # label_recursive='02.16.03',
+    #     plot_y_boxes=True
+    # )
 
-    visualizer.show_plot()
+    # visualizer.show_plot()
 
     # %% Two class y_boxes
     # visualizer = BoxVisualizer(
@@ -464,3 +512,31 @@ if __name__ == "__main__":
 
     # Find target samples where labels belong to what we want, multiple on each subplot
     # Use supblot that contains each pair of dimensions, 2 per figure
+
+
+"""
+TODO: Seperate errors into 
+    * inter-path error - points not belonging to class given high score for it
+    * itra-path error - parent point classified as child label
+    
+Iterate through all x points. Per x, set some threshold to classify whether it belongs to a label or not
+Use formula from slides to compute ratio.
+
+for x:
+    for y:
+        false_positives = ...
+        true_positives = ...
+"""
+
+
+"""
+TODO: <dataset_folder>/hierarchy_tc_edgelist
+Construct adjacency matrix from file ignoring: root, GO00...
+
+Construct false positive matrix using threshold and apply matrix multiplication
+
+Elementwise(FP, Matmul(G, A))
+
+Experiment with tensor batching
+
+"""
