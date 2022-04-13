@@ -101,6 +101,7 @@ def get_dim_variance(
 
 class BoxVisualizer:
 
+    name: str = None
     predictions: List[dict] = None
     axes: np.typing.NDArray = None
     dims: List[int] = None
@@ -114,12 +115,17 @@ class BoxVisualizer:
             self,
             rundir: str,
             dims: Iterable[int],
+            name: str = None,
             model_path: Optional[str] = None,
             config_path: Optional[str] = None,
             vocab_file: Optional[str] = None,
             get_predictions: Optional[bool] = True
     ) -> None:
         self.rundir: str = rundir
+        if name:
+            self.name = name
+        else:
+            self.name = rundir.split('/')[-1]
         model_path = f"{rundir}/{DEFAULT_MODEL_PATH}" if model_path is None else model_path
         config_path = f"{rundir}/{DEFAULT_CONFIG_PATH}" if config_path is None else config_path
         vocab_file = f"{rundir}/{DEFAULT_VOCAB_FILE}" if vocab_file is None else vocab_file
@@ -170,29 +176,35 @@ class BoxVisualizer:
             y_boxes: List[Tuple[List, List]] = []
             for x in tqdm(data, desc="predicting"):
                 r = self.predictor.predict_instance(x)
-                x_box_z = Tensor(r["x_boxes_z"])
-                x_box_Z = Tensor(r["x_boxes_Z"])
-                predictions.append(
-                    {
-                        "label_scores": r["scores"],
-                        "predicted_labels": r["predictions"],
-                        "true_labels": r["meta"]["labels"],
-                        "x_box": (x_box_z, x_box_Z)
-                    }
-                )
-                if not y_boxes:
+
+                prediction = {
+                    "label_scores": r["scores"],
+                    "predicted_labels": r["predictions"],
+                    "true_labels": r["meta"]["labels"]
+                }
+
+                if 'x_boxes_z' in r and "x_boxes_Z" in r:
+                    x_box_z = Tensor(r["x_boxes_z"])
+                    x_box_Z = Tensor(r["x_boxes_Z"])
+                    prediction["x_box"] = (x_box_z, x_box_Z)
+
+                predictions.append(prediction)
+                if not y_boxes and "y_boxes_z" in r and "y_boxes_Z" in r:
                     for y_box_z, y_box_Z in zip(r["y_boxes_z"], r["y_boxes_Z"]):
                         y_boxes.append((Tensor(y_box_z), Tensor(y_box_Z)))
             with open(self.rundir + "/box_vis_predictions.pkl", 'wb') as f:
                 pickle.dump(predictions, f)
-            with open(self.rundir + "/box_vis_y_boxes.pkl", 'wb') as f:
-                pickle.dump(y_boxes, f)
-            logger.info("Wrote prediction and y_box data to file")
+            if y_boxes:
+                with open(self.rundir + "/box_vis_y_boxes.pkl", 'wb') as f:
+                    pickle.dump(y_boxes, f)
+            logger.info("Wrote prediction data to file")
 
         assert len(predictions) > 0
         self.predictions = predictions
-        self.y_boxes = {self.vocab[idx]: y_box for idx, y_box in enumerate(y_boxes)}
-        self.total_dims = len(predictions[0]["x_box"][0])
+        if y_boxes:
+            self.y_boxes = {self.vocab[idx]: y_box for idx, y_box in enumerate(y_boxes)}
+        if "x_box" in predictions[0]:
+            self.total_dims = len(predictions[0]["x_box"][0])
 
     def set_dims(
             self,
