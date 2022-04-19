@@ -208,9 +208,15 @@ if __name__ == "__main__":
         name='Vector Model',
         dims=range(0, 4)
     )
+    hierarchy_analyzer = ErrorAnalyzer(
+        '/mnt/nfs/scratch1/asempruch/boxem/hierarchy_loss',
+        name='Hierarchy Loss',
+        dims=range(0, 4)
+    )
 
     for metric in (METRIC.f1, METRIC.hfpr):
-        for analyzer in (box_analyzer, vec_analyzer):
+        for analyzer in (box_analyzer, hierarchy_analyzer, vec_analyzer):
+        # for analyzer in (hierarchy_analyzer,):
             analyzer.plot_metric_per_label_depth(metric)
             analyzer.plot_metric_per_threshold(metric)
 
