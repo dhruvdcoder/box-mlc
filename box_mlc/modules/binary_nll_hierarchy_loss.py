@@ -89,11 +89,12 @@ class BinaryNLLHierarchyLoss(torch.nn.Module, Registrable):
 
     def __init__(
         self,
-        # vocab: Vocabulary,
+        vocab: Vocabulary,
         debug_level: int = 0,
         reduction: "str" = "mean",
         sampler: Sampler = None,
-        distance_weight: float = 1.0
+        distance_weight: float = 1.0,
+        exponential_scaling: bool = False
     ) -> None:
         """
         Args:
@@ -108,7 +109,9 @@ class BinaryNLLHierarchyLoss(torch.nn.Module, Registrable):
         self.sampler = sampler or TruePositiveNegativePairSampler()
         self.inference_loss = BinaryNLLLoss(debug_level=debug_level, reduction=reduction)
         self.distance_weight = distance_weight
+        self.exponential_scaling = exponential_scaling
         # self.distance_matrix = self._construct_distance_matrix(vocab)
+        self.construct_distance_matrix(vocab)
 
     def forward(
         self,
@@ -152,7 +155,11 @@ class BinaryNLLHierarchyLoss(torch.nn.Module, Registrable):
                 .index_select(0, indices[0])
                 .index_select(1, indices[1])
         ) # (batch, total_pairs)
-        distanced_weighted_loss_values = loss_sum_vector * (distance_vector*self.distance_weight)
+
+        if self.exponential_scaling:
+            distanced_weighted_loss_values = loss_sum_vector * torch.exp(distance_vector * self.distance_weight)
+        else:
+            distanced_weighted_loss_values = loss_sum_vector * (distance_vector*self.distance_weight)
 
         loss = torch.mean(distanced_weighted_loss_values)
 

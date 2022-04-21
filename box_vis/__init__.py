@@ -163,6 +163,7 @@ class BoxVisualizer:
         self.predictor._model.visualization_mode = True
 
         data = self.prediction_data
+        is_box_model = "y_boxes_z" in self.predictor.predict_instance(data[0])
 
         if exists(self.rundir + "/box_vis_predictions.pkl") and exists(self.rundir + "/box_vis_y_boxes.pkl"):
             with open(self.rundir + "/box_vis_predictions.pkl", 'rb') as f:

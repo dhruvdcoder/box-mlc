@@ -1,6 +1,7 @@
 from typing import List, Union, Dict, Any, Optional
 import logging
 import torch
+from allennlp.common import Lazy
 
 from allennlp.models import Model
 from allennlp.data import Vocabulary
@@ -35,7 +36,7 @@ class AlanHierarchyLossModel(Model):
         vec2box: Vec2Box,
         intersect: Intersection,
         volume: Volume,
-        loss_fn: BinaryNLLHierarchyLoss,
+        loss_fn: Lazy[BinaryNLLHierarchyLoss],
         initializer: Optional[InitializerApplicator] = None,
         visualization_mode: bool = True,
     ) -> None:
@@ -48,8 +49,8 @@ class AlanHierarchyLossModel(Model):
         self._vec2box = vec2box
         self._label_embeddings = label_embeddings
         self._feedforward = feedforward
-        self.loss_fn = loss_fn
-        loss_fn.construct_distance_matrix(vocab)
+        self.loss_fn = loss_fn.construct(vocab=vocab)
+        # loss_fn.construct_distance_matrix(vocab)
         self.map = MeanAvgPrecision()
         self.micro_map = MicroAvgPrecision()
         self.micro_macro_f1 = MicroMacroF1()

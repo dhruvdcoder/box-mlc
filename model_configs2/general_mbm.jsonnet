@@ -11,6 +11,7 @@ local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')
 local num_labels = dataset_metadata.num_labels;
 local num_input_features = dataset_metadata.input_features;
 
+local patience = std.parseJson(std.extVar('patience'));
 local batch_size = std.parseJson(std.extVar('batch_size'));
 local gumbel_beta = std.parseJson(std.extVar('gumbel_beta'));
 //local gumbel_beta = 0.00001;
@@ -28,8 +29,9 @@ local ff_weight_decay = std.parseJson(std.extVar('ff_weight_decay'));
 local lr_encoder = std.parseJson(std.extVar('lr_encoder'));
 //local lr_encoder = 0.001;
 //local lr_ratio = std.parseJson(std.extVar('lr_ratio'));
-local lr_ratio = 1;
-local lr_boxes = lr_ratio * lr_encoder;
+//local lr_ratio = 1;
+//local lr_boxes = lr_ratio * lr_encoder;
+local lr_boxes = std.parseJson(std.extVar('lr_boxes'));
 //local ff_weight_decay = 0;
 //local volume_temp = 1;
 local volume_temp = std.parseJson(std.extVar('volume_temp'));
@@ -42,6 +44,8 @@ local delta = 1e-8;
 local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
 //local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
+local distance_weight = std.parseJson(std.extVar('distance_weight'));
+local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
 //local box_weight_decay = 0;
 //local box_weight_decay = 0;
 //local final_activation = if std.parseJson(std.extVar('ff_same_final_activation')) then ff_activation else 'linear';
@@ -67,7 +71,8 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-    type: 'alan-baseline-model',
+//    type: 'alan-baseline-model',
+    type: 'alan-hierarchy-loss-model',
 //    debug_level: 0,
     feedforward: {
       input_dim: num_input_features,
@@ -103,6 +108,11 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 //        filepath: data_dir + '/' + dataset_metadata.dir_name + '/' + 'hierarchy.edgelist',
 //      },
 //    },
+    loss_fn: {
+      type: 'binary-nll-hierarchy-loss',
+      distance_weight: distance_weight,
+      exponential_scaling: exponential_scaling
+    },
     initializer: {
       regexes: [
         [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
@@ -133,7 +143,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
   trainer: {
     num_epochs: if test == '1' then 20 else 200,
     grad_norm: 10.0,
-    patience: 8,
+    patience: patience,
     validation_metric: '+MAP',
     cuda_device: std.parseInt(cuda_device),
     optimizer: {
