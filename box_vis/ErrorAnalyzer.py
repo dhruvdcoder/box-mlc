@@ -63,41 +63,35 @@ class ErrorAnalyzer(BoxVisualizer):
         all_thresholds = cp.unique(score_matrix)
         self.all_thresholds = all_thresholds
 
-        if exists(self.rundir + "/" + ERROR_FILE_NAME):
-            with open(self.rundir + "/" + ERROR_FILE_NAME, 'rb') as f:
-                self.errors = pkl.load(f)
-                logger.info("Read errors from file")
-            return self.errors
+        # TODO: uncomment again
+        # if exists(self.rundir + "/" + ERROR_FILE_NAME):
+        #     with open(self.rundir + "/" + ERROR_FILE_NAME, 'rb') as f:
+        #         self.errors = pkl.load(f)
+        #         logger.info("Read errors from file")
+        #     return self.errors
 
-        # TODO: possibly tensorize computations across multiple thresholds
-        # TODO: compute F1 over all thresholds and determine best threshold
         # np.seterr(invalid='ignore')
         if not self.adjacency_matrix:
             self._construct_adjacency_matrix()
 
         if not self.ground_truth_matrix:
             self._construct_ground_truth_matrix()
-        # all_thresholds = np.unique(score_matrix)[-200:]
 
         results = dict()
 
         num_batches = 200
 
         for thresholds in tqdm(cp.array_split(all_thresholds, num_batches), unit='batch'):
-            # positives_tensor = np.tile(score_matrix, [len(thresholds), 1, 1]) > thresholds[:, None, None]
             positives_tensor = cp.broadcast_to(score_matrix, [len(thresholds), *score_matrix.shape]) > thresholds[:, None, None]
             tp_tensor = cp.logical_and(self.ground_truth_matrix, positives_tensor)
             fp_tensor = cp.logical_and(cp.logical_not(self.ground_truth_matrix), positives_tensor)
             fn_tensor = cp.logical_and(self.ground_truth_matrix, cp.logical_not(positives_tensor))
-            result_tensor = fp_tensor*(self.ground_truth_matrix@self.adjacency_matrix > 0)
+            # hierarchy_fp_tensor = fp_tensor*(self.ground_truth_matrix@self.adjacency_matrix.T > 0)
+            hierarchy_fp_tensor = fp_tensor*(self.ground_truth_matrix@self.adjacency_matrix > 0)
 
             def store_result(key: str, value: NDArray):
                 if key not in results:
                     results[key] = cp.asnumpy(value)
-                # elif key != 'f1_per_threshold' and results[key].shape[0] > value.shape[0]:
-                #     padding_size = results[key].shape[0] - value.shape[0]
-                #     value = np.pad(value, ((0, padding_size), (0, 0)), 'constant')
-                # results[key] += value
                 else:
                     results[key] = np.append(results[key], cp.asnumpy(value), axis=0)
                 del value
@@ -117,18 +111,10 @@ class ErrorAnalyzer(BoxVisualizer):
                     store_result('f1_per_sample', f1_matrix)
                 elif axis == (1, 2):
                     store_result('f1_per_threshold', f1_matrix)
-                    # if 'f1_per_threshold' not in results:
-                    #     results['f1_per_threshold'] = []
-                    # results['f1_per_threshold'] = np.append(results['f1_per_threshold'], f1_matrix)
 
-            store_result('hfpr', result_tensor.sum((1, 2)) / fp_tensor.sum((1, 2)))
-            store_result('hfpr_per_label', result_tensor.sum(1) / fp_tensor.sum(1))
-            # if 'hfpr' not in results:
-            #     results['hfpr'] = result_tensor.sum((1, 2)) / fp_tensor.sum((1, 2))
-            # else:
-            #     results['hfpr'] += result_tensor.sum((1, 2)) / fp_tensor.sum((1, 2))
-
-        # results['hfpr'] /= num_batches
+        # TODO: put total hfpr too (threshold with maximum f1)
+            store_result('hfpr', hierarchy_fp_tensor.sum((1, 2)) / fp_tensor.sum((1, 2)))
+            store_result('hfpr_per_label', hierarchy_fp_tensor.sum(1) / fp_tensor.sum(1))
 
         with open(self.rundir + "/" + ERROR_FILE_NAME, 'wb') as f:
             pkl.dump(results, f)
@@ -172,7 +158,6 @@ class ErrorAnalyzer(BoxVisualizer):
         ax.set_xlabel("Label depth (number of samples)")
         plt.show()
 
-
     def plot_metric_per_threshold(self, metric: Enum):
         errors = self.errors or self.compute_error()
 
@@ -196,6 +181,7 @@ class ErrorAnalyzer(BoxVisualizer):
     def _get_label_depth(label: str):
         return len(label.split('.'))
 
+
 if __name__ == "__main__":
     # %% Two class y_boxes
     box_analyzer = ErrorAnalyzer(
@@ -213,12 +199,26 @@ if __name__ == "__main__":
         name='Hierarchy Loss',
         dims=range(0, 4)
     )
+    cone_analyzer = ErrorAnalyzer(
+        '/mnt/nfs/scratch1/asempruch/boxem/cone',
+        name='Cones',
+        dims=range(0, 4)
+    )
+
+    for analyzer in (box_analyzer, hierarchy_analyzer, vec_analyzer, cone_analyzer):
+        analyzer.compute_error()
+        errors = analyzer.errors
+        print(analyzer.name)
+        print('f1:', np.nanmax(errors['f1_per_threshold']))
+        print('hfpr:', np.nanmin(errors['hfpr']))
+
+    box_analyzer.errors['f1_per_threshold']
+
 
     for metric in (METRIC.f1, METRIC.hfpr):
-        for analyzer in (box_analyzer, hierarchy_analyzer, vec_analyzer):
-        # for analyzer in (hierarchy_analyzer,):
+        for analyzer in (box_analyzer, hierarchy_analyzer, vec_analyzer, cone_analyzer):
             analyzer.plot_metric_per_label_depth(metric)
-            analyzer.plot_metric_per_threshold(metric)
+            # analyzer.plot_metric_per_threshold(metric)
 
     # analyzer.plot_metric_per_label_depth('f1')
     # analyzer.plot_metric_per_label_depth('hfpr')

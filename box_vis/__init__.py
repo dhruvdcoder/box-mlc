@@ -1,21 +1,23 @@
 import json
 import logging
-from typing import List, Tuple, Iterable, Set, Dict, Any, Generator, Optional, Callable
+from typing import List, Tuple, Iterable, Set, Dict, Any, Generator, Optional, Callable, Union
 from numpy.typing import NDArray
 
 from box_embeddings.parameterizations.box_tensor import BoxTensor
 from box_embeddings.modules.intersection import Intersection, GumbelIntersection
 from box_embeddings.modules.volume import Volume, HardVolume, SoftVolume, BesselApproxVolume
 from torch import Tensor
+import torch
 from allennlp.models.archival import load_archive
 from allennlp.predictors.predictor import Predictor
 from allennlp.common.util import import_module_and_submodules
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Wedge
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 import numpy as np
+import cupy as cp
 from os.path import exists
 import pickle
 
@@ -69,34 +71,86 @@ def iter_dim_pairs(
         axes_idx += 1
 
 
-def get_dim_variance(
+def get_intersection_volume_by_dim(
         x_boxes: List[Tuple[Tensor, Tensor]],
         y_boxes: List[Tuple[Tensor, Tensor]],
         intersection: Intersection = GumbelIntersection(),
         volume: Volume = SoftVolume()
-) -> NDArray:
+) -> Tensor:
     total_dims = y_boxes[0][0].shape[0]
-    variance_by_dim = np.zeros(total_dims)
-    for dim in tqdm(range(total_dims), desc='Calculating intersection volume variance by dim', unit='dims'):
-        variance_by_x_box = np.zeros(len(x_boxes))
-        for x_idx, (x_box_z, x_box_Z) in enumerate(x_boxes):
-            score_per_label = np.zeros(len(y_boxes))
-            for y_idx, (y_box_z, y_box_Z) in enumerate(y_boxes):
-                x_box = BoxTensor((x_box_z[dim:dim + 1], x_box_Z[dim:dim + 1]))
-                y_box = BoxTensor((y_box_z[dim:dim + 1], y_box_Z[dim:dim + 1]))
-                inter_box = intersection(x_box, y_box)
-                score_per_label[y_idx] = volume(inter_box)
-                # if score_per_label[y_idx].item() != -29.93360710144043:
-                #     print("Got different volume:", score_per_label[y_idx].item())
+    # variance_by_dim = cp.zeros(total_dims)
 
-                # z_distance = np.abs(x_box_z[dim] - y_box_z[dim])
-                # Z_distance = np.abs(x_box_Z[dim] - y_box_Z[dim])
-                # score_per_label[y_idx] = np.mean((z_distance.item(), Z_distance.item()))
+    # TODO: vectorize computation
+    ## torch.log(softplus(box_tensor.Z - box_tensor.z, beta=beta)
+    x_box = BoxTensor.from_zZ(
+        torch.stack([box[0] for box in x_boxes]),
+        torch.stack([box[1] for box in x_boxes])
+    )  # (I, D)
 
-            variance_by_x_box[x_idx] = score_per_label.var()
-        variance_by_dim[dim] = variance_by_x_box.mean()
+    y_box = BoxTensor.from_zZ(
+        torch.stack([box[0] for box in y_boxes]),
+        torch.stack([box[0] for box in y_boxes])
+    )  # (L, D)
 
-    return variance_by_dim
+    x_box = x_box.box_reshape([x_box.box_shape[0], 1, x_box.box_shape[1]])
+    y_box = y_box.box_reshape([1, *y_box.box_shape])
+
+    # x_z_tensor = torch.stack([box[0] for box in x_boxes]).unsqueeze(1)
+    # x_Z_tensor = torch.stack([box[1] for box in x_boxes]).unsqueeze(1)
+    # y_z_tensor = torch.stack([box[0] for box in y_boxes]).unsqueeze(0)
+    # y_Z_tensor = torch.stack([box[0] for box in y_boxes]).unsqueeze(0)
+
+    intersection_by_dim: BoxTensor = intersection(x_box, y_box)
+    intersection_1d_boxes = BoxTensor.from_zZ(intersection_by_dim.z.unsqueeze(-1), intersection_by_dim.Z.unsqueeze(-1))
+    volume_by_dim: Tensor = volume(intersection_1d_boxes)
+
+    return volume_by_dim
+
+    # TODO: make heatmap out of these tensor, pass in all x and y boxes
+    # variance_by_dim = torch.var(volume_by_dim, dim=0)
+    # mean_by_dim = torch.mean(volume_by_dim, dim=0)
+    #
+    # # TODO: decide whether to take mean across label boxes for variance or to take the variance for the child label
+    #
+    # # x_z_tensor = cp.asarray([cp.asarray(box[0]) for box in x_boxes])
+    # # x_Z_tensor = cp.asarray([cp.asarray(box[1]) for box in x_boxes])
+    # #
+    # # y_z_tensor = cp.asarray([cp.asarray(box[0]) for box in y_boxes])
+    # # y_Z_tensor = cp.asarray([cp.asarray(box[1]) for box in y_boxes])
+    #
+    #
+    # # for dim in tqdm(range(total_dims), desc='Calculating intersection volume variance by dim', unit='dims'):
+    # #     variance_by_x_box = np.zeros(len(x_boxes))
+    # #     for x_idx, (x_box_z, x_box_Z) in enumerate(x_boxes):
+    # #         score_per_label = np.zeros(len(y_boxes))
+    # #         for y_idx, (y_box_z, y_box_Z) in enumerate(y_boxes):
+    # #             x_box = BoxTensor((x_box_z[dim:dim + 1], x_box_Z[dim:dim + 1]))
+    # #             y_box = BoxTensor((y_box_z[dim:dim + 1], y_box_Z[dim:dim + 1]))
+    # #             inter_box = intersection(x_box, y_box)
+    # #             score_per_label[y_idx] = volume(inter_box)
+    # #             # if score_per_label[y_idx].item() != -29.93360710144043:
+    # #             #     print("Got different volume:", score_per_label[y_idx].item())
+    # #
+    # #             # z_distance = np.abs(x_box_z[dim] - y_box_z[dim])
+    # #             # Z_distance = np.abs(x_box_Z[dim] - y_box_Z[dim])
+    # #             # score_per_label[y_idx] = np.mean((z_distance.item(), Z_distance.item()))
+    # #
+    # #         variance_by_x_box[x_idx] = score_per_label.var()
+    # #     variance_by_dim[dim] = variance_by_x_box.mean()
+    #
+    # return variance_by_dim
+
+
+def get_cone_score_by_dim(
+        x_vecs: List[Tensor],
+        y_vecs: List[Tensor]
+) -> Tensor:
+    x, y = torch.stack(x_vecs), torch.stack(y_vecs)
+
+    z = torch.max(y.unsqueeze(0), x.unsqueeze(1))
+    diff = y.unsqueeze(0) - z
+
+    return diff
 
 
 class BoxVisualizer:
@@ -107,7 +161,8 @@ class BoxVisualizer:
     dims: List[int] = None
     vocab: List[str]
     vocab_idx: Dict[str, int]
-    y_boxes: Dict[str, Tuple[Tensor, Tensor]]     # Maps label to y_box
+    y_boxes: Dict[str, Tuple[Tensor, Tensor]] = None    # Maps label to y_box
+    y_vecs: Dict[str, Tensor] = None
     total_dims: int                                      # Dimensionality of boxes
     ax_lims: List[float] = [None] * 4
 
@@ -122,10 +177,8 @@ class BoxVisualizer:
             get_predictions: Optional[bool] = True
     ) -> None:
         self.rundir: str = rundir
-        if name:
-            self.name = name
-        else:
-            self.name = rundir.split('/')[-1]
+        self.name = name or rundir.split('/')[-1]
+
         model_path = f"{rundir}/{DEFAULT_MODEL_PATH}" if model_path is None else model_path
         config_path = f"{rundir}/{DEFAULT_CONFIG_PATH}" if config_path is None else config_path
         vocab_file = f"{rundir}/{DEFAULT_VOCAB_FILE}" if vocab_file is None else vocab_file
@@ -165,45 +218,57 @@ class BoxVisualizer:
         data = self.prediction_data
         is_box_model = "y_boxes_z" in self.predictor.predict_instance(data[0])
 
-        if exists(self.rundir + "/box_vis_predictions.pkl") and exists(self.rundir + "/box_vis_y_boxes.pkl"):
-            with open(self.rundir + "/box_vis_predictions.pkl", 'rb') as f:
-                predictions = pickle.load(f)
-            with open(self.rundir + "/box_vis_y_boxes.pkl", 'rb') as f:
-                y_boxes = pickle.load(f)
-            logger.info("Done reading data...")
-        else:
-            logger.info("Starting to predict")
-            predictions = []
-            y_boxes: List[Tuple[List, List]] = []
-            for x in tqdm(data, desc="predicting"):
-                r = self.predictor.predict_instance(x)
+        # if exists(self.rundir + "/box_vis_predictions.pkl") and exists(self.rundir + "/box_vis_y_boxes.pkl"):
+        #     with open(self.rundir + "/box_vis_predictions.pkl", 'rb') as f:
+        #         predictions = pickle.load(f)
+        #     with open(self.rundir + "/box_vis_y_boxes.pkl", 'rb') as f:
+        #         y_boxes = pickle.load(f)
+        #     logger.info("Done reading data...")
+        # else:
+        logger.info("Starting to predict")
+        predictions = []
+        y_boxes: List[Tuple[Tensor, Tensor]] = []
+        y_vecs: List[Tensor] = []
+        for x in tqdm(data, desc="predicting"):
+            r = self.predictor.predict_instance(x)
 
-                prediction = {
-                    "label_scores": r["scores"],
-                    "predicted_labels": r["predictions"],
-                    "true_labels": r["meta"]["labels"]
-                }
+            prediction = {
+                "label_scores": r["scores"],
+                "predicted_labels": r["predictions"],
+                "true_labels": r["meta"]["labels"]
+            }
 
-                if 'x_boxes_z' in r and "x_boxes_Z" in r:
-                    x_box_z = Tensor(r["x_boxes_z"])
-                    x_box_Z = Tensor(r["x_boxes_Z"])
-                    prediction["x_box"] = (x_box_z, x_box_Z)
+            if 'x_boxes_z' in r and "x_boxes_Z" in r:
+                x_box_z = Tensor(r["x_boxes_z"])
+                x_box_Z = Tensor(r["x_boxes_Z"])
+                prediction["x_box"] = (x_box_z, x_box_Z)
 
-                predictions.append(prediction)
-                if not y_boxes and "y_boxes_z" in r and "y_boxes_Z" in r:
-                    for y_box_z, y_box_Z in zip(r["y_boxes_z"], r["y_boxes_Z"]):
-                        y_boxes.append((Tensor(y_box_z), Tensor(y_box_Z)))
-            with open(self.rundir + "/box_vis_predictions.pkl", 'wb') as f:
-                pickle.dump(predictions, f)
-            if y_boxes:
-                with open(self.rundir + "/box_vis_y_boxes.pkl", 'wb') as f:
-                    pickle.dump(y_boxes, f)
-            logger.info("Wrote prediction data to file")
+            if 'x_vecs' in r:
+                prediction['x_vec'] = Tensor(r['x_vecs'])
 
+            predictions.append(prediction)
+
+            if not y_boxes and "y_boxes_z" in r and "y_boxes_Z" in r:
+                for y_box_z, y_box_Z in zip(r["y_boxes_z"], r["y_boxes_Z"]):
+                    y_boxes.append((Tensor(y_box_z), Tensor(y_box_Z)))
+
+            if not y_vecs and "y_vecs" in r:
+                for y_vec in r["y_vecs"]:
+                    y_vecs.append(Tensor(y_vec))
+
+        with open(self.rundir + "/box_vis_predictions.pkl", 'wb') as f:
+            pickle.dump(predictions, f)
+        if y_boxes:
+            with open(self.rundir + "/box_vis_y_boxes.pkl", 'wb') as f:
+                pickle.dump(y_boxes, f)
+        logger.info("Wrote prediction data to file")
+        ## \t
         assert len(predictions) > 0
         self.predictions = predictions
         if y_boxes:
             self.y_boxes = {self.vocab[idx]: y_box for idx, y_box in enumerate(y_boxes)}
+        if y_vecs:
+            self.y_vecs = {self.vocab[idx]: y_vec for idx, y_vec in enumerate(y_vecs)}
         if "x_box" in predictions[0]:
             self.total_dims = len(predictions[0]["x_box"][0])
 
@@ -232,7 +297,6 @@ class BoxVisualizer:
 
         """
         logger.info("Visualizing...")
-        ax_lims = self.ax_lims
 
         if label_recursive:
             labels = list(filter(lambda l: label_recursive.startswith(l), self.vocab))
@@ -270,13 +334,19 @@ class BoxVisualizer:
                 return pred['true_labels'][0]
 
         if auto_dims:
-            top_dims = self.find_highest_variance_dims(
-                x_boxes=[pred['x_box'] for pred in get_preds()],
-                y_boxes=[self.y_boxes[label] for label in labels],
-                top_k=auto_dims,
-                intersection=self.predictor._model._intersect,
-                volume=self.predictor._model._volume
-            )
+            if self.y_boxes:
+                volumes_by_dim = get_intersection_volume_by_dim(
+                    [pred['x_box'] for pred in get_preds()],
+                    [self.y_boxes[label] for label in labels],
+                    self.predictor._model._intersect,
+                    self.predictor._model._volume
+                )
+            elif self.y_vecs:
+                volumes_by_dim = get_cone_score_by_dim(
+                    [pred['x_vec'] for pred in get_preds()],
+                    [self.y_vecs[label] for label in labels]
+                )
+            top_dims = self.find_highest_variance_dims(volumes_by_dim, top_k=auto_dims)
             self.set_dims(top_dims)
 
         num_graphs = int(np.ceil((len(self.dims) + 1)/2))
@@ -285,6 +355,7 @@ class BoxVisualizer:
             fig: Figure
             axes: NDArray
             fig, axes = plt.subplots(num_graphs, 1, figsize=(6, num_graphs*6), squeeze=False)
+            fig.suptitle(self.name)
             axes = axes.flatten()
             self.axes = axes
 
@@ -292,39 +363,12 @@ class BoxVisualizer:
         if plot_y_boxes:
             for label in tqdm(labels, unit='y_boxes'):
                 for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
-                    y_box = self.y_boxes[label]
-                    rect: Rectangle = box_to_rectangle(y_box, x_dim, y_dim)
-                    # rect.set_color(get_color(label))
-                    rect.set_edgecolor(get_color(label))
-                    ax.add_patch(rect)
-
-                    if ax_lims[0] is None or y_box[0][x_dim] < ax_lims[0]:
-                        ax_lims[0] = y_box[0][x_dim]
-                    if ax_lims[1] is None or y_box[1][x_dim] > ax_lims[1]:
-                        ax_lims[1] = y_box[1][x_dim]
-                    if ax_lims[2] is None or y_box[0][y_dim] < ax_lims[2]:
-                        ax_lims[2] = y_box[0][y_dim]
-                    if ax_lims[3] is None or y_box[1][y_dim] > ax_lims[3]:
-                        ax_lims[3] = y_box[1][y_dim]
+                    self._plot_y_entity(ax, label, x_dim, y_dim, get_color)
 
         # Plot x boxes as points
         for pred in tqdm(get_preds(), unit='x_boxes'):
-            x_box = pred["x_box"]
             for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
-
-                x, y = box_to_point(x_box, x_dim, y_dim)
-                ax.scatter(x, y, color=get_color(get_x_label(pred)))
-
-                if ax_lims[0] is None or x < ax_lims[0]:
-                    ax_lims[0] = x
-                elif ax_lims[1] is None or x > ax_lims[1]:
-                    ax_lims[1] = x
-                if ax_lims[2] is None or y < ax_lims[2]:
-                    ax_lims[2] = y
-                elif ax_lims[3] is None or y > ax_lims[3]:
-                    ax_lims[3] = y
-
-        self.ax_lims = ax_lims
+                self._plot_x_entity(pred, ax, get_x_label, x_dim, y_dim, get_color)
 
         for x_dim, y_dim, ax in iter_dim_pairs(self.dims, axes=self.axes):
             ax.title.set_text(f"({x_dim}, {y_dim})")
@@ -347,29 +391,163 @@ class BoxVisualizer:
         plt.show()
         self.clear()
 
-    @staticmethod
-    def find_highest_variance_dims(
-            x_boxes: List[Tuple[Tensor, Tensor]],
-            y_boxes: List[Tuple[Tensor, Tensor]],
-            intersection: Intersection = GumbelIntersection(),
-            volume: Volume = BesselApproxVolume(),
-            top_k: Optional[int] = 0
+    def _plot_x_entity(
+            self,
+            pred,
+            ax: Axes,
+            get_x_label: Callable,
+            x_dim: int,
+            y_dim: int,
+            get_color: Callable
     ):
-        variance_by_dim = get_dim_variance(x_boxes, y_boxes, intersection, volume)
+        ax_lims = self.ax_lims
 
-        sorted_variance_idx = variance_by_dim.argsort()
-        # plt.bar(
-        #     range(len(sorted_variance_idx)),
-        #     [variance_by_dim[idx] for idx in sorted_variance_idx[::-1]],
-        # )
-        plt.bar(
-            range(len(sorted_variance_idx)),
-            variance_by_dim,
-        )
+        if 'x_box' in pred:
+            x_box = pred['x_box']
+            x, y = box_to_point(x_box, x_dim, y_dim)
+
+        elif 'x_vec' in pred:
+            x_vec = pred['x_vec']
+            x, y = x_vec[x_dim], x_vec[y_dim]
+
+        else:
+            raise ValueError('No x_box or x_vec to plot')
+
+        ax.scatter(x, y, color=get_color(get_x_label(pred)))
+
+        if ax_lims[0] is None or x < ax_lims[0]:
+            ax_lims[0] = x
+        elif ax_lims[1] is None or x > ax_lims[1]:
+            ax_lims[1] = x
+        if ax_lims[2] is None or y < ax_lims[2]:
+            ax_lims[2] = y
+        elif ax_lims[3] is None or y > ax_lims[3]:
+            ax_lims[3] = y
+
+    def _plot_y_entity(
+            self,
+            ax: Axes,
+            label: str,
+            x_dim: int,
+            y_dim: int,
+            get_color: Callable
+    ):
+        ax_lims = self.ax_lims
+
+        if self.y_boxes:
+            y_box = self.y_boxes[label]
+            rect: Rectangle = box_to_rectangle(y_box, x_dim, y_dim)
+
+            rect.set_edgecolor(get_color(label))
+            ax.add_patch(rect)
+
+            if ax_lims[0] is None or y_box[0][x_dim] < ax_lims[0]:
+                ax_lims[0] = y_box[0][x_dim]
+            if ax_lims[1] is None or y_box[1][x_dim] > ax_lims[1]:
+                ax_lims[1] = y_box[1][x_dim]
+            if ax_lims[2] is None or y_box[0][y_dim] < ax_lims[2]:
+                ax_lims[2] = y_box[0][y_dim]
+            if ax_lims[3] is None or y_box[1][y_dim] > ax_lims[3]:
+                ax_lims[3] = y_box[1][y_dim]
+
+        if self.y_vecs:
+            y_vec = self.y_vecs[label]
+
+            wedge = Wedge(
+                [y_vec[x_dim], y_vec[y_dim]],
+                1e10, 0, 90,
+                alpha=1,
+                linewidth=2,
+                fill=False,
+                edgecolor=get_color(label)
+            )
+            ax.add_patch(wedge)
+
+            if ax_lims[0] is None or y_vec[x_dim] < ax_lims[0]:
+                ax_lims[0] = y_vec[x_dim]
+            if ax_lims[1] is None or y_vec[x_dim] > ax_lims[1]:
+                ax_lims[1] = y_vec[x_dim]
+            if ax_lims[2] is None or y_vec[y_dim] < ax_lims[2]:
+                ax_lims[2] = y_vec[y_dim]
+            if ax_lims[3] is None or y_vec[y_dim] > ax_lims[3]:
+                ax_lims[3] = y_vec[y_dim]
+
+    def plot_intersection_heatmap(
+            self,
+            x_entities: List[Tuple[Tensor, Tensor]] = None,
+            y_entities: List[Tuple[Tensor, Tensor]] = None,
+            intersection: Intersection = None,
+            volume: Volume = None,
+            title: str = None
+    ) -> None:
+        title = title or self.name
+
+        if self.y_boxes:
+            x_boxes = x_entities or [pred['x_box'] for pred in self.predictions]
+            y_boxes = y_entities or list(self.y_boxes.values())
+            intersection = intersection or self.predictor._model._intersect
+            volume = volume or self.predictor._model._volume
+
+            intersection_tensor = get_intersection_volume_by_dim(
+                x_boxes,
+                y_boxes,
+                intersection,
+                volume
+            )
+
+        elif self.y_vecs:
+            x_vecs = x_entities or [pred['x_vec'] for pred in self.predictions]
+            y_vecs = y_entities or list(self.y_vecs.values())
+
+            intersection_tensor = get_cone_score_by_dim(x_vecs, y_vecs)
+
+        else:
+            raise ValueError('No boxes or vectors to calculate scores for')
+
+        variance_matrix = torch.var(intersection_tensor, dim=0)
+        mean_matrix = torch.mean(intersection_tensor, dim=0)
+
+        fig: Figure
+        axes: List[Axes]
+        fig, axes = plt.subplots(2, 1)
+
+        fig.suptitle(f'{self.name} intersection heatmap by label and dimension')
+
+        for idx, (title, data) in enumerate((
+                ('variance (sqrt)', torch.sqrt(variance_matrix)),  # take sqrt of variance to increase contrast
+                ('mean', mean_matrix)
+        )):
+            axes[idx].imshow(data, cmap='autumn', interpolation='none')
+            axes[idx].set_title(title)
+
         plt.show()
 
+        for title, data in (
+                ('variance', torch.mean(variance_matrix, dim=0)),
+                ('mean', torch.mean(mean_matrix, dim=0))
+        ):
+            fig, ax = plt.subplots(1, 1)
+            fig.suptitle(f'{self.name} intersection by dimension')
+
+            ax.plot(range(data.shape[0]), torch.sort(data, descending=True).values)
+            ax.set_title(title)
+            plt.show()
+
+    @staticmethod
+    def find_highest_variance_dims(
+            volumes_by_dim: Tensor,
+            top_k: Optional[int] = 0
+            # x_entities: Union[List[Tuple[Tensor, Tensor]], List[Tensor]],
+            # y_entities: Union[List[Tuple[Tensor, Tensor]], List[Tensor]],
+            # intersection: Intersection = GumbelIntersection(),
+            # volume: Volume = BesselApproxVolume(),
+    ):
+        variance_by_dim = torch.mean(
+            torch.var(volumes_by_dim, dim=0),
+            dim=0
+        )
         top_k = variance_by_dim.argsort()[-top_k:]
-        return np.flip(top_k)
+        return torch.flip(top_k, dims=[0])
 
     @staticmethod
     def _filter_by_recursive_label(
@@ -390,54 +568,92 @@ class BoxVisualizer:
 
 
 if __name__ == "__main__":
+
+    cone_visualizer = BoxVisualizer(
+        '/mnt/nfs/scratch1/asempruch/boxem/cone',
+        name='Cone',
+        dims=range(1000, 1004)
+    )
+
+    # cone_visualizer.visualize(
+    #     x_lim=30,
+    #     plot_y_boxes=True,
+    #     label_recursive='20.03.01.01',
+    #     color_map='Greens',
+    #     show_plot=True,
+    #     auto_dims=6
+    # )
+
+    cone_visualizer.plot_intersection_heatmap()
+
     # %% Two class y_boxes
-    visualizer = BoxVisualizer(
+    box_visualizer = BoxVisualizer(
         '/mnt/nfs/scratch1/asempruch/1750',
+        name='Box Model',
         dims=range(0, 4)
     )
-    # visualizer.compute_error([-3.0, -2.9, -2.8])
+
+    # %% Plot intersection variance and mean heatmap
+
+    # visualizer.plot_intersection_heatmap()
+
 
     # %% Plot label scores
-    buckets = {val: 0 for val in np.arange(-16, 0, 0.1)}
-    all_label_scores = list()
-    for pred in visualizer.predictions:
-        for label_score in pred['label_scores']:
-            for key in reversed(buckets.keys()):
-                if label_score > key:
-                    buckets[key] += 1
-                    break
+    # buckets = {val: 0 for val in np.arange(-16, 0, 0.1)}
+    # all_label_scores = list()
+    # for pred in visualizer.predictions:
+    #     for label_score in pred['label_scores']:
+    #         for key in reversed(buckets.keys()):
+    #             if label_score > key:
+    #                 buckets[key] += 1
+    #                 break
     # %%
-    plt.clf()
-    plt.rcParams['figure.dpi'] = 500
-    plt.bar(buckets.keys(), buckets.values(), width=0.05)
-    plt.xticks(
-        [round(val, 2) for val in buckets.keys()],
-        rotation=90,
-        fontsize=2
-    )
-    # all_label_scores += pred['label_scores']
-    # print(len(all_label_scores))
-    plt.bar(range(len(all_label_scores)), sorted(all_label_scores))
-    plt.show()
+    # plt.clf()
+    # plt.rcParams['figure.dpi'] = 500
+    # plt.bar(buckets.keys(), buckets.values(), width=0.05)
+    # plt.xticks(
+    #     [round(val, 2) for val in buckets.keys()],
+    #     rotation=90,
+    #     fontsize=2
+    # )
+    # # all_label_scores += pred['label_scores']
+    # # print(len(all_label_scores))
+    # plt.bar(range(len(all_label_scores)), sorted(all_label_scores))
+    # plt.show()
 
     # %%
-    # visualizer.visualize(
-    #     x_lim=30,
-    #     label_recursive='20.01.01.01.01.02',
-    #     plot_y_boxes=True,
-    #     auto_dims=6,
-    #     color_map='Reds'
+
+    # hierarchy_visualizer = BoxVisualizer(
+    #     '/mnt/nfs/scratch1/asempruch/boxem/hierarchy_loss',
+    #     name='Hierarchy Loss Box Model',
+    #     dims=range(0, 4)
     # )
 
-    # visualizer.visualize(
-    #     x_lim=30,
-    #     label_recursive='02.16.03',
-    #     plot_y_boxes=True,
-    #     auto_dims=6,
-    #     color_map='Greens'
-    # )
+    # %%
+    visualizer = cone_visualizer
+    # Disjoint labels
+    disjoint = [
+        ('01.01.03.01.01', 'Greens'),
+        ('10.03.05.01', 'Oranges')
+    ]
 
-    # visualizer.show_plot()
+    joint = [
+        ('20.03.01.01', 'Blues'),
+        ('20.09.07.03', 'Reds')
+    ]
+
+    for idx, (label, colors) in enumerate(disjoint):
+        visualizer.visualize(
+            x_lim=30,
+            plot_y_boxes=True,
+            label_recursive=label,
+            color_map=colors,
+            auto_dims=None if idx else 6
+        )
+
+    visualizer.show_plot()
+
+    # %%
 
     # %% all y_boxes
     # visualizer.visualize(
