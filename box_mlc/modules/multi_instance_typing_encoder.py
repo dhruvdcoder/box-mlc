@@ -33,8 +33,6 @@ class GenericMultiInstanceTypingEncoder(MultiInstanceTypingEncoder):
         textfield_embedder: TextFieldEmbedder,
         seq2vec_encoder: Seq2VecEncoder = None,
         seq2seq_encoder: Seq2SeqEncoder = None,
-        mention_seq2seq_encoder: Optional[Union[str, Seq2SeqEncoder]] = None,
-        mention_seq2vec_encoder: Optional[Union[str, Seq2VecEncoder]] = None,
         debug_level: int = 0,
         **kwargs: Any,
     ) -> None:
@@ -56,40 +54,13 @@ class GenericMultiInstanceTypingEncoder(MultiInstanceTypingEncoder):
         """
         super().__init__()  # type:ignore
         self._textfield_embedder = textfield_embedder
-        self._seq2vec_encoder = TimeDistributed(seq2vec_encoder) if seq2vec_encoder else None  # type: ignore
+        self._seq2vec_encoder = seq2vec_encoder  # type: ignore
 
-        self._seq2seq_encoder: Optional[TimeDistributed] = (
-            TimeDistributed(seq2seq_encoder)  # type:ignore
-            if seq2seq_encoder
-            else None
+        self._seq2seq_encoder: Optional[Seq2SeqEncoder] = (
+            seq2seq_encoder
         )
 
-        if mention_seq2seq_encoder is None:
-            self._mention_seq2seq_encoder = None
-        elif mention_seq2seq_encoder == "same":
-            self._mention_seq2seq_encoder = self._seq2seq_encoder
-        else:
-            self._mention_seq2seq_encoder = TimeDistributed(  # type: ignore
-                mention_seq2seq_encoder
-            )
-
-        if mention_seq2vec_encoder is None:
-            self._mention_seq2vec_encoder = None
-        elif mention_seq2vec_encoder == "same":
-            self._mention_seq2vec_encoder = self._seq2vec_encoder
-        else:
-            self._mention_seq2vec_encoder = TimeDistributed(  # type:ignore
-                mention_seq2vec_encoder
-            )
-
         self.debug_level = debug_level
-
-    @property
-    def mention_output_order(self) -> int:
-        if self._mention_seq2vec_encoder is None:
-            return 3
-        else:
-            return 2
 
     @property
     def sentences_output_order(self) -> int:
@@ -99,8 +70,8 @@ class GenericMultiInstanceTypingEncoder(MultiInstanceTypingEncoder):
             return 2
 
     def forward(
-        self, sentences: TextFieldTensors, mentions: TextFieldTensors
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, text: TextFieldTensors
+    ) -> torch.Tensor:
         """Applies the sequence of textfield_embedder->seq2seq_encoder->seq2vec_encoder
         to both sentences and mentions assuming that they are formed from `ListField[TextField]`.
 
@@ -114,40 +85,28 @@ class GenericMultiInstanceTypingEncoder(MultiInstanceTypingEncoder):
 
         """
         # get the embeddings assuming that shape of tensor is (batch, sentences, seq_len)
-        sentences_emb = self._textfield_embedder(
-            sentences, num_wrapping_dims=1
-        )  # shape (batch, sentences, seq_len, hidden_dim)
-        sentences_mask = get_text_field_mask(
-            sentences, num_wrapping_dims=1
+        text_emb = self._textfield_embedder(
+            text
+        )
+        # sentences_emb = self._textfield_embedder(
+        #     sentences, num_wrapping_dims=1
+        # )  # shape (batch, sentences, seq_len, hidden_dim)
+        text_mask = get_text_field_mask(
+            text
         )  # shape (batch, sentences, seq_len)
-        mention_emb = self._textfield_embedder(
-            mentions, num_wrapping_dims=1
-        )  # shape same as above but seq_len is mention len
-        mentions_mask = get_text_field_mask(mentions, num_wrapping_dims=1)
 
         # skip seq2seq_encoder if pass-through
 
         sentences_s2s = (
-            self._seq2seq_encoder(sentences_emb, sentences_mask)
+            self._seq2seq_encoder(text_emb, text_mask)
             if self._seq2seq_encoder is not None
-            else sentences_emb
+            else text_emb
         )
 
         sentences_vec = (
-            self._seq2vec_encoder(sentences_s2s, sentences_mask)
+            self._seq2vec_encoder(sentences_s2s, text_mask)
             if self._seq2vec_encoder is not None
             else sentences_s2s
         )
 
-        mention_s2s = (
-            self._mention_seq2seq_encoder(mention_emb, mentions_mask)
-            if self._mention_seq2seq_encoder is not None
-            else mention_emb
-        )
-        mention_vec = (
-            self._mention_seq2vec_encoder(mention_s2s, mentions_mask)
-            if self._mention_seq2vec_encoder is not None
-            else mention_s2s
-        )
-
-        return sentences_vec, mention_vec
+        return sentences_vec

@@ -31,12 +31,61 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
   type: 'train_test_log_to_wandb',
   evaluate_on_test: true,
   dataset_reader: {
-    type: 'arff',
-    num_labels: num_labels,
+    type: 'eurlex',
+    tokenizer: {
+      type: 'pretrained_transformer',
+      model_name: transformer_model,
+      max_length: 512,
+    },
+//    tokenizer: {
+//      type: 'spacy',
+//    },
+    token_indexers: {
+      text: {
+        type: 'pretrained_transformer',
+        model_name: transformer_model,
+      },
+//      tokens: {
+//        type: 'single_id',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
+//      [if add_position_features then 'positions']: { // TODO: get rid of position embeddings
+//        type: 'single_id',
+//        namespace: 'positions',
+//        feature_name: 'position',
+//        default_value: '0',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
+    },
+    test: if test == '1' then true else false,
   },
   validation_dataset_reader: {
-    type: 'arff',
-    num_labels: num_labels,
+    type: 'eurlex',
+    tokenizer: {
+      type: 'pretrained_transformer',
+      model_name: transformer_model,
+      max_length: 512,
+    },
+//    tokenizer: {
+//      type: 'spacy',
+//    },
+    token_indexers: {
+      text: {
+        type: 'pretrained_transformer',
+        model_name: transformer_model,
+      },
+//        type: 'single_id',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
+//      [if add_position_features then 'positions']: {
+//        type: 'single_id',
+//        namespace: 'positions',
+//        feature_name: 'position',
+//        default_value: '0',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
+    },
+    test: if test == '1' then true else false,
   },
   train_data_path: (data_dir + '/' + dataset_metadata.dir_name + '/' +
                     dataset_metadata.train_file),
@@ -75,7 +124,6 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
         [@'.*linear_layers.*bias', { type: 'zero' }],
       ],
     },
-
   },
   data_loader: {
     shuffle: true,

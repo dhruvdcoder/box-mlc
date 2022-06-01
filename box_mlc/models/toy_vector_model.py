@@ -229,7 +229,7 @@ class ToyVector(Model):
         x: torch.Tensor,
         labels: torch.Tensor,
         meta: List[Dict[str, Any]],
-        **kwargs: Any,
+        results: Dict,
     ) -> torch.Tensor:
         """
 
@@ -238,7 +238,7 @@ class ToyVector(Model):
                 Each value tensor will be of shape (batch, x_dim)
             labels: Tensor containing one-hot labels. Has shape (batch, label_set_size).
             meta: Contains raw text and other meta data for each datapoint.
-            **kwargs: Unused
+            results: result dict
 
         Returns:
             Dict: Tensor dict containing the following keys: loss
@@ -249,6 +249,10 @@ class ToyVector(Model):
             self.current_labels = labels
         encoded_vec = x
         predicted_label_reps = self._feedforward(encoded_vec)  # b, hidden_size
+
+        results['x_vecs'] = predicted_label_reps
+        results['y_vecs'] = self._label_embeddings.weight.unsqueeze(0)
+
         scores = self.scorer(
             self._label_embeddings.weight, predicted_label_reps
         )  # shape (batch, label_set_size)
@@ -275,12 +279,12 @@ class ToyVector(Model):
             Dict: Tensor dict containing the following keys: loss
 
         """
+        results: Dict[str, Any] = {"meta": meta}
         scores = self.get_scores(
-            x, labels, meta, **kwargs
+            x, labels, meta, results
         )  # shape (batch, label_set_size)
 
         # loss
-        results: Dict[str, Any] = {"meta": meta}
         results["scores"] = scores
         results["positive_probs"] = (
             torch.exp(scores)

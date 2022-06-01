@@ -151,3 +151,13 @@ class BinaryNLLLoss(torch.nn.Module, Registrable):
 
 
 BinaryNLLLoss.register("binary-nllloss")(BinaryNLLLoss)
+
+"""
+TODO: Create new file for new loss function
+if ground truth is positive and point not in cone
+
+If score is positive, point is outside the cone.
+If label positive, do same Relu operation
+
+If label is negative, relu of score*-1
+"""

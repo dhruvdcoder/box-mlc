@@ -43,13 +43,13 @@ logger = logging.getLogger(__name__)
 class InstanceFields(TypedDict):
     """Contents which form an instance"""
 
-    sentences: ListField  #: it is actually ListField[TextField], one TextField instance per sentence
-    mentions: ListField  #: again ListField[TextField]
-    labels: MultiLabelField  #: types
+    title: str  #: it is actually ListField[TextField], one TextField instance per sentence
+    text: ListField  #: again ListField[TextField]
+    concepts: MultiLabelField  #: types
 
 
-@DatasetReader.register("nyt")
-class NytReader(DatasetReader):
+@DatasetReader.register("eurlex")
+class EurlexReader(DatasetReader):
     """
     Multi-label classification `dataset <https://www.inf.uni-hamburg.de/en/inst/ab/lt/resources/data/blurb-genre-collection.html>`_.
 
@@ -60,7 +60,8 @@ class NytReader(DatasetReader):
         self,
         tokenizer: Tokenizer,
         token_indexers: Dict[str, TokenIndexer],
-        use_transitive_closure: bool = False,
+        # use_transitive_closure: bool = False,
+        test: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -78,18 +79,16 @@ class NytReader(DatasetReader):
             **kwargs,
         )
         self._tokenizer = tokenizer
+        self.test = test
         self._token_indexers = token_indexers
-        self._use_transitive_closure = use_transitive_closure
+        # self._use_transitive_closure = use_transitive_closure
 
     def example_to_fields(
         self,
-        text: str,
+        type: str,
+        concepts: List[str],
         title: str,
-        labels: List[str],
-        general_descriptors: List[List[str]],
-        label_paths: List[List[str]],
-        xml_path: str,
-        taxonomy: List[str],
+        main_body: List[str],
         meta: Dict = None,
         **kwargs: Any,
     ) -> InstanceFields:
@@ -116,45 +115,24 @@ class NytReader(DatasetReader):
         if meta is None:
             meta = {}
 
+        text = "\n".join(main_body)
+
         meta["text"] = text
-        meta["labels"] = labels
-        meta["general_descriptors"] = general_descriptors
-        meta["label_path"] = label_paths
-        meta["xml_path"] = xml_path
-        meta["taxonomy"] = taxonomy
+        meta["labels"] = concepts
+        # TODO: add some sort of id to each example (probably already written in dataset)
 
-        sentence_fields = ListField(
-            [
-                TextField(
-                    self._tokenizer.tokenize(text)
-                )
-            ]
-        )
-        mention_fields = ListField(
-            [
-                TextField(
-                    self._tokenizer.tokenize(title)
-                )
-            ]
-        )
-        # need to use MultiLabelField
-        labels = MultiLabelField(labels)
-
+        labels = MultiLabelField(concepts)
         return {
-            "sentences": sentence_fields,
-            "mentions": mention_fields,
+            "text": TextField(self._tokenizer.tokenize(text)),
             "labels": labels,
         }
 
     def text_to_instance(  # type:ignore
         self,
-        text: str,
+        type: str,
+        concepts: List[str],
         title: str,
-        labels: List[str],
-        general_descriptors: List[str],
-        label_paths: List[List[str]],
-        xml_path: str,
-        taxonomy: List[str],
+        main_body: List[str],
         **kwargs: Any
     ) -> Instance:
         """Converts contents of a single raw example to :class:`Instance`.
@@ -175,7 +153,7 @@ class NytReader(DatasetReader):
         """
         meta_dict: Dict = {}
         main_fields = self.example_to_fields(
-            text, title, labels, general_descriptors, label_paths, xml_path, taxonomy, meta=meta_dict
+            type, concepts, title, main_body, meta=meta_dict
         )
 
         return Instance(
@@ -192,18 +170,15 @@ class NytReader(DatasetReader):
             data instances
 
         """
-        for file_ in glob.glob(file_path, flags=glob.EXTGLOB):
+        for file_count, file_ in self.shard_iterable(enumerate(glob.glob(file_path))):
             logger.info(f"Reading {file_}")
             with open(file_) as f:
-                for line in self.shard_iterable(f.readlines()):
-                    example = json.loads(line)
-                    instance = self.text_to_instance(**example)
-                    yield instance
+                line = f.readline()
+                example = json.loads(line)
+                instance = self.text_to_instance(**example)
+                yield instance
+            if self.test and file_count > 20:
+                break
 
     def apply_token_indexers(self, instance: Instance) -> None:
-        for sentence, mention in zip(
-            instance["sentences"].field_list,
-            instance["mentions"].field_list,
-        ):
-            sentence.token_indexers = self._token_indexers
-            mention.token_indexers = self._token_indexers
+        instance["text"].token_indexers = self._token_indexers

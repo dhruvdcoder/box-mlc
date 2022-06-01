@@ -373,4 +373,12 @@
     validation_file: 'Mediamill-fold@(7|8).arff',
     test_file: 'Mediamill-fold@(9|10).arff',
   },
+  eurlex57k: {
+    num_labels: 4271,
+    input_features: 2,
+    dir_name: 'eurlex57k',
+    train_file: 'train/*.json',
+    validation_file: 'dev/*.json',
+    test_file: 'test/*.json'
+  },
 }

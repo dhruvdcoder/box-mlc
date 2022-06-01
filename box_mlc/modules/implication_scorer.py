@@ -244,3 +244,21 @@ class HyperbolicImplicationScorer(ImplicationScorer):
             ) * scores
 
         return scores
+
+
+@ImplicationScorer.register("cone")
+class ConeImplicationScorer(ImplicationScorer):
+    def __init__(
+        self,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)  # type:ignore
+
+    def forward(self, y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        x, y = torch.square(x), torch.square(y)
+        z = torch.max(y.unsqueeze(0), x.unsqueeze(1))
+        z_sum = z.sum(2)
+        y_sum = y.sum(1)
+        diff = y_sum.unsqueeze(0) - z_sum
+
+        return diff
