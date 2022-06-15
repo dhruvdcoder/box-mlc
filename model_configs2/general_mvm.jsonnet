@@ -106,9 +106,10 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
           },
         ],
         watch_model: false,
-        should_log_parameter_statistics: false,
         save_model_archive: false,
-
+                # DEBUG
+        should_log_parameter_statistics: true,
+        distribution_interval: 100,
       },
     ]  },
 }

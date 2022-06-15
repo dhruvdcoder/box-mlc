@@ -4,6 +4,9 @@ import numpy as np
 from allennlp.models import Model
 from allennlp.data.vocabulary import Vocabulary
 from allennlp.modules.feedforward import FeedForward
+from allennlp.modules.seq2vec_encoders.seq2vec_encoder import Seq2VecEncoder
+from allennlp.modules.seq2seq_encoders import LstmSeq2SeqEncoder
+from allennlp.data.fields.text_field import TextFieldTensors
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
 from box_mlc.modules.implication_scorer import (
     ImplicationScorer,
@@ -28,6 +31,8 @@ import logging
 
 from allennlp.commands import train
 
+from box_mlc.modules.multi_instance_typing_encoder import MultiInstanceTypingEncoder
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +44,7 @@ class ToyVector(Model):
         self,
         vocab: Vocabulary,
         feedforward: FeedForward,
+        encoder_stack: MultiInstanceTypingEncoder = None,
         scorer: Optional[ImplicationScorer] = None,
         regularizer: Optional[RegularizerApplicator] = None,
         label_regularizer: Optional[HierarchyRegularizer] = None,
@@ -108,6 +114,7 @@ class ToyVector(Model):
             vocab.get_vocab_size(namespace="labels"),
             self._feedforward.get_output_dim(),  # type: ignore
         )
+        self._encoder = encoder_stack
         self._label_regularizer = label_regularizer
         self.debug_level = debug_level
         self.constraint_violation = constraint_violation
@@ -152,12 +159,13 @@ class ToyVector(Model):
         self.register_buffer(
             "current_labels", torch.empty(0), persistent=False
         )
-        self.register_buffer(
-            "adj",
-            torch.tensor(self.constraint_violation_metric.adjacency_matrix),
-            persistent=False,
-        )
-        self.epoch = -1  #: completed epochs
+        if self.constraint_violation_metric:
+            self.register_buffer(
+                "adj",
+                torch.tensor(self.constraint_violation_metric.adjacency_matrix),
+                persistent=False,
+            )
+        # self.epoch = -1  #: completed epochs
 
         if initializer is not None:
             initializer(self)
@@ -247,7 +255,8 @@ class ToyVector(Model):
 
         if labels is not None:
             self.current_labels = labels
-        encoded_vec = x
+        # TODO: look at how data changes as it passes through encoder and then feedforward
+        encoded_vec = x if not self._encoder else self._encoder(x)
         predicted_label_reps = self._feedforward(encoded_vec)  # b, hidden_size
 
         results['x_vecs'] = predicted_label_reps
@@ -293,8 +302,8 @@ class ToyVector(Model):
         )
         results["loss"] = self.loss_fn(scores, labels.type_as(scores))
 
-        if self.epoch < self.warmup_epochs:
-            results["loss"] = results["loss"] * 0
+        # if self.epoch < self.warmup_epochs:
+        #     results["loss"] = results["loss"] * 0
 
         # metrics
 
@@ -312,7 +321,7 @@ class ToyVector(Model):
         if self.constraint_violation_metric is not None:
             self.constraint_violation_metric(results["scores"], labels)
 
-        if self.add_new_metrics:
+        if self.add_new_metrics and hasattr(self, "adj"):
             s = self.get_min_normalized_scores(results["scores"])
             p = self.get_min_normalized_scores(results["positive_probs"])
             self.map_min_n(s, labels)
@@ -414,3 +423,262 @@ class ToyVector(Model):
             magnitude = -magnitude
 
         return float(magnitude)
+
+
+@Model.register("toy-vector-encode")
+class ToyVectorEncode(ToyVector):
+    """Does Multilabel classification for toy-data"""
+
+    def __init__(
+        self,
+        encoder_stack: MultiInstanceTypingEncoder,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Following is the model architecture:
+
+        .. aafig::
+            :aspect: 60
+            :scale: 150
+            :proportional:
+
+            +-------------------------------------------------------+
+            |                       +---------+                     |
+            |              +------->+  Loss   <--------------+      |
+            |              |        +---------+              |      |
+            |              |                                 |      |
+            |              ^                                 |      |
+            |      +-------+------+      +--------------+    |      |
+            |      |     Dot      <------+ Label Embed  |    |      |
+            |      +-------+------+      +-------^------+    |      |
+            |              ^                                 |      |
+            |      +-------+------+                          |      |
+            |      | feedforward  |                    +-----+      |
+            |      +-------^------+                    |            |
+            |              |                           |            |
+            |              ^                           |            |
+            |              +                           +            |
+            |   x: List[float]                  Labels: 0,1,0,1,... |
+            |                                                       |
+            |                                                       |
+            |                                                       |
+            |                          Single datapoint             |
+            |                                                       |
+            +-------------------------------------------------------+
+
+
+        Args:
+            vocab: Vocabulary for the model. It will have the following namespaces: labels, tokens, positions
+            initializer: Init regexes for all weights in the model. See corresponding `AllenNLP doc <https://docs.allennlp.org/master/api/nn/initializers/#initializerapplicator>`_
+            feedforward: Used at the end on either sentence endcoding or mention+sentence encoding based on the concat_mention argument.
+            scorer: To score the predicted label representations
+            regularizer: See corresponding `AllenNLP doc <https://docs.allennlp.org/master/api/nn/regularizers/regularizer_applicator/>`_
+            label_regularizer: Regularization for the relationships in the label space.
+            warmup_epochs: Number of epochs to perform warmup training on labels.
+                This is only useful when using `label_regularizer` that requires warm-up like `HierarchyRegularizer`. (default:0)
+            batch_regularization: Whether to only apply regularization to labels that are seen in the batch.
+            label_sample_percent: Percent of labels to sample for label-label regularization.
+                               Default 100 implies include all labels in the regularization loss.
+            debug_level: scale of 0 to 3. 0 meaning no-debug (fastest) and 3 highest debugging possible (slowest).
+            **kwargs: Unused
+        Returns: (None)
+
+        """
+        super().__init__(**kwargs)
+        self._encoder = encoder_stack
+
+    def get_scores(  # type:ignore
+        self,
+        text: torch.Tensor,
+        labels: torch.Tensor,
+        meta: List[Dict[str, Any]],
+        results: Dict,
+    ) -> torch.Tensor:
+        """
+
+        Args:
+            x: Array field Tensors corresponding to the data points.
+                Each value tensor will be of shape (batch, x_dim)
+            labels: Tensor containing one-hot labels. Has shape (batch, label_set_size).
+            meta: Contains raw text and other meta data for each datapoint.
+            results: result dict
+
+        Returns:
+            Dict: Tensor dict containing the following keys: loss
+
+        """
+
+        if labels is not None:
+            self.current_labels = labels
+        encoded_vec = self._encoder(text)
+        predicted_label_reps = self._feedforward(encoded_vec)  # b, hidden_size
+
+        results['x_vecs'] = predicted_label_reps
+        results['y_vecs'] = self._label_embeddings.weight.unsqueeze(0)
+
+        scores = self.scorer(
+            self._label_embeddings.weight, predicted_label_reps
+        )  # shape (batch, label_set_size)
+
+        return scores
+
+    def forward(  # type:ignore
+            self,
+            text: torch.Tensor,
+            labels: torch.Tensor,
+            meta: List[Dict[str, Any]],
+            **kwargs: Any,
+    ) -> Dict[str, torch.Tensor]:
+
+        results: Dict[str, Any] = {"meta": meta}
+        scores = self.get_scores(
+            text, labels, meta, results
+        )  # shape (batch, label_set_size)
+
+        # loss
+        results["scores"] = scores
+        results["positive_probs"] = (
+            torch.exp(scores)
+            if self.binary_nll_loss
+            else torch.sigmoid(scores)
+        )
+        results["loss"] = self.loss_fn(scores, labels.type_as(scores))
+
+        if self.epoch < self.warmup_epochs:
+            results["loss"] = results["loss"] * 0
+
+        # metrics
+
+        if labels is not None:
+            self.compute_metrics(results, labels)
+
+        return results
+
+
+@Model.register("toy-vector-encode-sentences")
+class ToyVectorEncodeSentences(ToyVector):
+    """Does Multilabel classification for toy-data"""
+
+    def __init__(
+        self,
+        encoder_stack: MultiInstanceTypingEncoder,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Following is the model architecture:
+
+        .. aafig::
+            :aspect: 60
+            :scale: 150
+            :proportional:
+
+            +-------------------------------------------------------+
+            |                       +---------+                     |
+            |              +------->+  Loss   <--------------+      |
+            |              |        +---------+              |      |
+            |              |                                 |      |
+            |              ^                                 |      |
+            |      +-------+------+      +--------------+    |      |
+            |      |     Dot      <------+ Label Embed  |    |      |
+            |      +-------+------+      +-------^------+    |      |
+            |              ^                                 |      |
+            |      +-------+------+                          |      |
+            |      | feedforward  |                    +-----+      |
+            |      +-------^------+                    |            |
+            |              |                           |            |
+            |              ^                           |            |
+            |              +                           +            |
+            |   x: List[float]                  Labels: 0,1,0,1,... |
+            |                                                       |
+            |                                                       |
+            |                                                       |
+            |                          Single datapoint             |
+            |                                                       |
+            +-------------------------------------------------------+
+
+
+        Args:
+            vocab: Vocabulary for the model. It will have the following namespaces: labels, tokens, positions
+            initializer: Init regexes for all weights in the model. See corresponding `AllenNLP doc <https://docs.allennlp.org/master/api/nn/initializers/#initializerapplicator>`_
+            feedforward: Used at the end on either sentence endcoding or mention+sentence encoding based on the concat_mention argument.
+            scorer: To score the predicted label representations
+            regularizer: See corresponding `AllenNLP doc <https://docs.allennlp.org/master/api/nn/regularizers/regularizer_applicator/>`_
+            label_regularizer: Regularization for the relationships in the label space.
+            warmup_epochs: Number of epochs to perform warmup training on labels.
+                This is only useful when using `label_regularizer` that requires warm-up like `HierarchyRegularizer`. (default:0)
+            batch_regularization: Whether to only apply regularization to labels that are seen in the batch.
+            label_sample_percent: Percent of labels to sample for label-label regularization.
+                               Default 100 implies include all labels in the regularization loss.
+            debug_level: scale of 0 to 3. 0 meaning no-debug (fastest) and 3 highest debugging possible (slowest).
+            **kwargs: Unused
+        Returns: (None)
+
+        """
+        super().__init__(**kwargs)
+        self._encoder = encoder_stack
+
+    def get_scores(  # type:ignore
+        self,
+        sentences: TextFieldTensors,
+        labels: torch.Tensor,
+        meta: List[Dict[str, Any]],
+        results: Dict,
+    ) -> torch.Tensor:
+        """
+
+        Args:
+            x: Array field Tensors corresponding to the data points.
+                Each value tensor will be of shape (batch, x_dim)
+            labels: Tensor containing one-hot labels. Has shape (batch, label_set_size).
+            meta: Contains raw text and other meta data for each datapoint.
+            results: result dict
+
+        Returns:
+            Dict: Tensor dict containing the following keys: loss
+
+        """
+
+        if labels is not None:
+            self.current_labels = labels
+        sentence_vec = self._encoder(sentences)  # shapes (batch, sentences, hidden_size)
+        batch, sentences, hidden_dims = sentence_vec.shape
+
+        encoded_vec = sentence_vec
+
+        if self._dropout:
+            encoded_vec = self._dropout(encoded_vec)
+
+        predicted_label_reps = self._feedforward(encoded_vec)
+
+        results['x_vecs'] = predicted_label_reps
+        results['y_vecs'] = self._label_embeddings.weight.unsqueeze(0)
+
+        scores = self.scorer(
+            self._label_embeddings.weight, predicted_label_reps
+        )  # shape (batch, label_set_size)
+
+        return scores
+
+    def forward(  # type:ignore
+            self,
+            sentences: TextFieldTensors,
+            mentions: TextFieldTensors,
+            labels: torch.Tensor,
+            meta: List[Dict[str, Any]],
+            **kwargs: Any,
+    ) -> Dict[str, torch.Tensor]:
+
+        results: Dict[str, Any] = {"meta": meta}
+        log_probabilities = self.get_scores(
+            sentences, labels, meta, results, **kwargs
+        )
+
+        if labels is not None:
+            results["loss"] = self.loss_fn(log_probabilities, labels)
+
+            if self.epoch < self.warmup_epochs:
+                results["loss"] = results["loss"] * 0
+            # metrics
+            self.compute_metrics(results, labels)
+
+        return results

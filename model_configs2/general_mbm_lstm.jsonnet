@@ -1,12 +1,14 @@
 // env variables
-local root_dir = std.extVar('ROOT_DIR');
-local data_dir = std.extVar('DATA_DIR');
+//local root_dir = std.extVar('ROOT_DIR');
+local root_dir = '/home/asempruch/boxem/box-mlc';
+//local data_dir = std.extVar('DATA_DIR');
 local test = std.extVar('TEST');  // a test run with small dataset
 local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
 // model class specific variable
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
-local dataset_reader = std.parseJson(std.extVar('dataset_reader'));
+local dataset_reader = if dataset_name == 'eurlex57k' then 'eurlex' else 'rcv1';
+local data_dir = if dataset_name == 'eurlex57k' then '/mnt/nfs/scratch1/asempruch/boxem/datasets' else '/mnt/nfs/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
 local num_input_features = dataset_metadata.input_features;
@@ -14,55 +16,29 @@ local num_input_features = dataset_metadata.input_features;
 local patience = std.parseJson(std.extVar('patience'));
 local batch_size = std.parseJson(std.extVar('batch_size'));
 local gumbel_beta = std.parseJson(std.extVar('gumbel_beta'));
-//local gumbel_beta = 0.00001;
 local ff_hidden = std.parseJson(std.extVar('ff_hidden'));
-//local ff_hidden = 100;
-local ff_dropout = std.parseJson(std.extVar('ff_dropout'));
-//local ff_dropout = 0;
 local ff_activation = std.parseJson(std.extVar('ff_activation'));
-//local ff_activation = 'sigmoid';
 local ff_linear_layers = std.parseJson(std.extVar('ff_linear_layers'));
-//local ff_linear_layers = 1;
 local ff_weight_decay = std.parseJson(std.extVar('ff_weight_decay'));
-//local ff_weight_decay = 0.1;
-//local ff_linear_layers=2;
 local lr_encoder = std.parseJson(std.extVar('lr_encoder'));
-//local lr_encoder = 0.001;
-//local lr_ratio = std.parseJson(std.extVar('lr_ratio'));
-//local lr_ratio = 1;
-//local lr_boxes = lr_ratio * lr_encoder;
 local lr_boxes = std.parseJson(std.extVar('lr_boxes'));
-//local ff_weight_decay = 0;
-//local volume_temp = 1;
 local volume_temp = std.parseJson(std.extVar('volume_temp'));
-//local volume_temp = 0.1;
-//local step_up = std.parseJson(std.extVar('step_up'));
-//local box_space_dim = std.parseInt(std.toString(std.floor(ff_hidden / step_up)));
 local box_space_dim = ff_hidden;
-//local delta = std.parseJson(std.extVar('delta'));
 local delta = 1e-8;
-local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
-//local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
-local distance_weight = std.parseJson(std.extVar('distance_weight'));
-local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
-//local box_weight_decay = 0;
-//local box_weight_decay = 0;
-//local final_activation = if std.parseJson(std.extVar('ff_same_final_activation')) then ff_activation else 'linear';
-local final_activation = ff_activation;
 
 local transformer_model = std.parseJson(std.extVar('transformer_model'));
 
-local cnn_kernel_size = 64;
-local position_emb_size = 64;
 local seq2vec_hidden_size = 1024;
 local dropout = 0;
-local concatenate_mention_rep = false;
-local add_position_features = false;
 local init_weight = std.parseJson(std.extVar('init_weight'));
 local init_bias = std.parseJson(std.extVar('init_bias'));
 local init_embed_weight = std.parseJson(std.extVar('init_embed_weight'));
 local init_embed_delta = std.parseJson(std.extVar('init_embed_delta'));
+
+local enc_embedding_dim = std.parseJson(std.extVar('enc_embedding_dim'));
+local enc_s2s_hidden_size = std.parseJson(std.extVar('enc_s2s_hidden_size'));
+local enc_s2s_num_layers = std.parseJson(std.extVar('enc_s2s_num_layers'));
 
 local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 {
@@ -71,14 +47,11 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
   dataset_reader: {
     type: dataset_reader,
     tokenizer: {
-      type: 'pretrained_transformer',
-      model_name: transformer_model,
-      max_length: 512,
+      type: 'spacy',
     },
     token_indexers: {
       text: {
-        type: 'pretrained_transformer',
-        model_name: transformer_model,
+        type: 'single_id',
       },
     },
     test: if test == '1' then true else false,
@@ -86,28 +59,12 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
   validation_dataset_reader: {
     type: dataset_reader,
     tokenizer: {
-      type: 'pretrained_transformer',
-      model_name: transformer_model,
-      max_length: 512,
+      type: 'spacy',
     },
-//    tokenizer: {
-//      type: 'spacy',
-//    },
     token_indexers: {
       text: {
-        type: 'pretrained_transformer',
-        model_name: transformer_model,
+        type: 'single_id',
       },
-//        type: 'single_id',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
-//      [if add_position_features then 'positions']: {
-//        type: 'single_id',
-//        namespace: 'positions',
-//        feature_name: 'position',
-//        default_value: '0',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
     },
     test: if test == '1' then true else false,
   },
@@ -125,16 +82,25 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     encoder_stack: {
       debug_level: 0,
       textfield_embedder: {
-          token_embedders: {
-            text: {
-              type: "pretrained_transformer",
-              model_name: transformer_model,
-            }
-          }
+        token_embedders: {
+          text: {
+            type: 'embedding',
+            embedding_dim: enc_embedding_dim,
+            pretrained_file: 'https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz',
+            trainable: true,
+          },
+        },
       },
-      seq2vec_encoder: { // Aggregates token embeddings to one embedding
-        type: 'bert_pooler',
-        pretrained_model: transformer_model,
+      seq2seq_encoder: {
+        type: 'lstm',
+        input_size: enc_embedding_dim,
+        hidden_size: enc_s2s_hidden_size,
+        num_layers: enc_s2s_num_layers,
+        bidirectional: true,
+      },
+      seq2vec_encoder: {
+        type: 'mean',
+        embedding_dim: enc_s2s_hidden_size*2,
       },
     },
     feedforward: {
@@ -162,14 +128,14 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     },
     initializer: {
       regexes: [
-//        [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
-//        [@'.*linear_layers.*bias', { type: 'zero' }],
-//        ['_label_embeddings.center.weight', { type: 'uniform' }, ],
-//        [ '_label_embeddings.delta', { type: 'constant', val: 0.01 }],
-        [@'.*linear_layers.*weight', init_weight],
-        [@'.*linear_layers.*bias', init_bias],
-        ['_label_embeddings.center.weight', init_embed_weight ],
-        [ '_label_embeddings.delta', init_embed_delta ],
+        [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
+        [@'.*linear_layers.*bias', { type: 'zero' }],
+        ['_label_embeddings.center.weight', { type: 'uniform' }, ],
+        [ '_label_embeddings.delta', { type: 'constant', val: 0.01 }],
+//        [@'.*linear_layers.*weight', init_weight],
+//        [@'.*linear_layers.*bias', init_bias],
+//        ['_label_embeddings.center.weight', init_embed_weight ],
+//        [ '_label_embeddings.delta', init_embed_delta ],
       ],
     },
   },

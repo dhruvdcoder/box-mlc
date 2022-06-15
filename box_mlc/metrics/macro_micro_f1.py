@@ -30,8 +30,11 @@ class MicroMacroF1(Metric):
 
     def get_metric(self, reset: bool = False) -> Dict[str, float]:
         eps = self.eps
+        # if isinstance(self.tp, torch.Tensor):
         p = self.tp.sum() / (self.tp.sum() + self.fp.sum() + eps)
         r = self.tp.sum() / (self.tp.sum() + self.fn.sum() + eps)
+        # else:
+        #     p, r = 0.0, 0.0
         micro_f1 = 2 * p * r / (p + r + eps)
         macro_p = self.tp / (self.tp + self.fp + eps)
         macro_r = self.tp / (self.tp + self.fn + eps)

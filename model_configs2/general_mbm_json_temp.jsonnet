@@ -6,7 +6,6 @@ local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
 // model class specific variable
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
-local dataset_reader = std.parseJson(std.extVar('dataset_reader'));
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
 local num_input_features = dataset_metadata.input_features;
@@ -59,17 +58,17 @@ local seq2vec_hidden_size = 1024;
 local dropout = 0;
 local concatenate_mention_rep = false;
 local add_position_features = false;
-local init_weight = std.parseJson(std.extVar('init_weight'));
-local init_bias = std.parseJson(std.extVar('init_bias'));
-local init_embed_weight = std.parseJson(std.extVar('init_embed_weight'));
-local init_embed_delta = std.parseJson(std.extVar('init_embed_delta'));
+//local init_weight = std.parseJson(std.extVar('init_weight'));
+//local init_bias = std.parseJson(std.extVar('init_bias'));
+//local init_embed_weight = std.parseJson(std.extVar('init_embed_weight'));
+//local init_embed_delta = std.parseJson(std.extVar('init_embed_delta'));
 
 local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 {
   type: 'train_test_log_to_wandb',
   evaluate_on_test: true,
   dataset_reader: {
-    type: dataset_reader,
+    type: 'eurlex',
     tokenizer: {
       type: 'pretrained_transformer',
       model_name: transformer_model,
@@ -80,11 +79,22 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
         type: 'pretrained_transformer',
         model_name: transformer_model,
       },
+//      tokens: {
+//        type: 'single_id',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
+//      [if add_position_features then 'positions']: { // TODO: get rid of position embeddings
+//        type: 'single_id',
+//        namespace: 'positions',
+//        feature_name: 'position',
+//        default_value: '0',
+//        token_min_padding_length: cnn_kernel_size,
+//      },
     },
     test: if test == '1' then true else false,
   },
   validation_dataset_reader: {
-    type: dataset_reader,
+    type: 'eurlex',
     tokenizer: {
       type: 'pretrained_transformer',
       model_name: transformer_model,
@@ -119,7 +129,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-    type: 'multi-instance-typing-box-model',
+    type: 'box-distance-box-model',
     debug_level: 0,
     add_new_metrics: false,
     encoder_stack: {
@@ -162,21 +172,21 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     },
     initializer: {
       regexes: [
-//        [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
-//        [@'.*linear_layers.*bias', { type: 'zero' }],
-//        ['_label_embeddings.center.weight', { type: 'uniform' }, ],
-//        [ '_label_embeddings.delta', { type: 'constant', val: 0.01 }],
-        [@'.*linear_layers.*weight', init_weight],
-        [@'.*linear_layers.*bias', init_bias],
-        ['_label_embeddings.center.weight', init_embed_weight ],
-        [ '_label_embeddings.delta', init_embed_delta ],
+        [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
+        [@'.*linear_layers.*bias', { type: 'zero' }],
+        ['_label_embeddings.center.weight', { type: 'uniform' }, ],
+        [ '_label_embeddings.delta', { type: 'constant', val: 0.01 }],
+//        [@'.*linear_layers.*weight', init_weight],
+//        [@'.*linear_layers.*bias', init_bias],
+//        ['_label_embeddings.center.weight', init_embed_weight ],
+//        [ '_label_embeddings.delta', init_embed_delta ],
       ],
     },
   },
   data_loader: {
     batch_sampler: {
         type: 'bucket',
-        batch_size: if test == '1' then 2 else batch_size, # TODO: might need to set batch size to 2 for BERT
+        batch_size: if test == '1' then 1 else batch_size, # TODO: might need to set batch size to 2 for BERT
         sorting_keys: ['text'],
     },
     max_instances_in_memory: if test == '1' then 16 else 1000,
@@ -185,7 +195,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
   },
   trainer: {
     num_epochs: if test == '1' then 20 else 200,
-    grad_norm: 10.0,
+    grad_norm: 1.0,
     patience: patience,
     validation_metric: '+MAP',
     num_gradient_accumulation_steps: 16,

@@ -37,14 +37,11 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
   dataset_reader: {
     type: dataset_reader,
     tokenizer: {
-      type: 'pretrained_transformer',
-      model_name: transformer_model,
-      max_length: 2048,
+      type: 'spacy',
     },
     token_indexers: {
       text: {
-        type: 'pretrained_transformer',
-        model_name: transformer_model,
+        type: 'single_id',
       },
     },
     test: if test == '1' then true else false,
@@ -52,25 +49,12 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
   validation_dataset_reader: {
     type: dataset_reader,
     tokenizer: {
-      type: 'pretrained_transformer',
-      model_name: transformer_model,
-      max_length: 2048,
+      type: 'spacy',
     },
     token_indexers: {
       text: {
-        type: 'pretrained_transformer',
-        model_name: transformer_model,
+        type: 'single_id',
       },
-//        type: 'single_id',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
-//      [if add_position_features then 'positions']: {
-//        type: 'single_id',
-//        namespace: 'positions',
-//        feature_name: 'position',
-//        default_value: '0',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
     },
     test: if test == '1' then true else false,
   },
@@ -87,17 +71,25 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
     encoder_stack: {
       debug_level: 0,
       textfield_embedder: {
-          token_embedders: {
-            text: {
-              type: "pretrained_transformer",
-              model_name: transformer_model,
-              train_parameters: true,
-            }
-          }
+        token_embedders: {
+          text: {
+            type: 'embedding',
+            embedding_dim: 300,
+            pretrained_file: 'https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz',
+            trainable: true,
+          },
+        },
       },
-      seq2vec_encoder: { // Aggregates token embeddings to one embedding
-        type: 'bert_pooler',
-        pretrained_model: transformer_model,
+      seq2seq_encoder: {
+        type: 'lstm',
+        input_size: 300,
+        hidden_size: 512,
+        num_layers: 3,
+        bidirectional: true,
+      },
+      seq2vec_encoder: {
+        type: 'mean',
+        embedding_dim: 1024,
       },
     },
     feedforward: {
@@ -153,6 +145,7 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
         ],
         watch_model: false,
         save_model_archive: false,
+        should_log_parameter_statistics: false,
         # DEBUG
 //        should_log_parameter_statistics: true,
 //        distribution_interval: 100,

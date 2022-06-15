@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 class InstanceFields(TypedDict):
     """Contents which form an instance"""
 
-    sentences: ListField  #: it is actually ListField[TextField], one TextField instance per sentence
-    mentions: ListField  #: again ListField[TextField]
+    text: TextField  #: it is actually ListField[TextField], one TextField instance per sentence
+    # mentions: ListField  #: again ListField[TextField]
     labels: MultiLabelField  #: types
 
 
@@ -65,6 +65,7 @@ elif allennlp_major_version >= 2:
             tokenizer: Tokenizer,
             token_indexers: Dict[str, TokenIndexer],
             use_transitive_closure: bool = False,
+            test: bool = False,
             **kwargs: Any,
         ) -> None:
             """
@@ -84,6 +85,7 @@ elif allennlp_major_version >= 2:
             self._tokenizer = tokenizer
             self._token_indexers = token_indexers
             self._use_transitive_closure = use_transitive_closure
+            self.test = test
 
         def example_to_fields(
             self,
@@ -113,19 +115,8 @@ elif allennlp_major_version >= 2:
             meta["labels"] = labels
             meta["idx"] = idx
 
-            sentence_fields = ListField(
-                [
-                    TextField(
-                        self._tokenizer.tokenize(text),
-                    )
-                ]
-            )
-            mention_fields = ListField(
-                [
-                    TextField(
-                        self._tokenizer.tokenize(headline),
-                    )
-                ]
+            text_field = TextField(
+                self._tokenizer.tokenize(text),
             )
 
             # if self._use_transitive_closure:
@@ -133,8 +124,7 @@ elif allennlp_major_version >= 2:
             #    meta["using_tc"] = True
 
             return {
-                "sentences": sentence_fields,
-                "mentions": mention_fields,
+                "text": text_field,
                 "labels": MultiLabelField(labels),
             }
 
@@ -182,9 +172,4 @@ elif allennlp_major_version >= 2:
                         yield instance
 
         def apply_token_indexers(self, instance: Instance) -> None:
-            for sentence, mention in zip(
-                instance["sentences"].field_list,
-                instance["mentions"].field_list,
-            ):
-                sentence.token_indexers = self._token_indexers
-                mention.token_indexers = self._token_indexers
+            instance["text"].token_indexers = self._token_indexers
