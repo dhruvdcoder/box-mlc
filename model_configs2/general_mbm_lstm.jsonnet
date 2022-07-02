@@ -8,7 +8,7 @@ local use_wandb = (if test == '1' then false else true);
 // model class specific variable
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
 local dataset_reader = if dataset_name == 'eurlex57k' then 'eurlex' else 'rcv1';
-local data_dir = if dataset_name == 'eurlex57k' then '/mnt/nfs/scratch1/asempruch/boxem/datasets' else '/mnt/nfs/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
+local data_dir = if dataset_name == 'eurlex57k' then '/gypsum/scratch1/asempruch/boxem/datasets' else '/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
 local num_input_features = dataset_metadata.input_features;

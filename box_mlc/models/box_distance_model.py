@@ -74,6 +74,22 @@ class BoxDistanceBoxModel(Model):
     as well.
     """
 
+    @torch.no_grad()
+    def get_min_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
+        adj_T = (self.adj.transpose(0, 1))[None, :, :]
+
+        return ((adj_T * scores[:, None, :]).min(dim=-1)[0]).detach()
+
+    @torch.no_grad()
+    def get_max_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
+        adj = (self.adj)[None, :, :]
+
+        return ((adj * scores[:, None, :]).max(dim=-1)[0]).detach()
+
+    def get_device(self):
+        for p in self._label_embeddings.parameters():
+            return p.device
+
     def __init__(
         self,
         vocab: Vocabulary,
@@ -85,6 +101,8 @@ class BoxDistanceBoxModel(Model):
         label_embeddings: BoxEmbeddingModule,
         alpha: float,
         gamma: float,
+        distance_type: str = 'l1',
+        num_distance_dims: int = 0,
         dropout: float = None,
         constraint_violation: Optional[ConstraintViolationMetric] = None,
         regularizer: Optional[RegularizerApplicator] = None,
@@ -198,6 +216,8 @@ class BoxDistanceBoxModel(Model):
         self._vec2box = vec2box
         self._label_embeddings = label_embeddings
         self._label_box_regularizer = label_box_regularizer
+        self._distance_type = distance_type
+        self._num_distance_dims = num_distance_dims
         self.debug_level = debug_level
         self.visualization_mode = visualization_mode
         self.loss_fn = BinaryNLLLoss()
@@ -246,22 +266,6 @@ class BoxDistanceBoxModel(Model):
 
         if initializer is not None:
             initializer(self)
-
-    @torch.no_grad()
-    def get_min_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
-        adj_T = (self.adj.transpose(0, 1))[None, :, :]
-
-        return ((adj_T * scores[:, None, :]).min(dim=-1)[0]).detach()
-
-    @torch.no_grad()
-    def get_max_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
-        adj = (self.adj)[None, :, :]
-
-        return ((adj * scores[:, None, :]).max(dim=-1)[0]).detach()
-
-    def get_device(self):
-        for p in self._label_embeddings.parameters():
-            return p.device
 
     def get_regularization_penalty(self) -> Optional[torch.Tensor]:
         """Applies all the regularization for this model.
@@ -409,6 +413,18 @@ class BoxDistanceBoxModel(Model):
         #     results["y_boxes_Z"] = label_boxes.Z.unsqueeze(0)
 
         # Stack z and Z tensors and take mean across newly added dimension
+
+        def aggregate_distances(dist_input: torch.Tensor):
+
+            dist = dist_input if not self._num_distance_dims else torch.topk(dist_input, k=self._num_distance_dims, dim=-1).values
+
+            if self._distance_type == 'l1':
+                return torch.sum(dist, dim=-1)
+            if self._distance_type == 'l2':
+                return torch.norm(dist, 2, dim=-1)
+
+            raise ValueError(f"Unsupported distance_type {self._distance_type}")
+
         predicted_centers = predicted_label_reps.unsqueeze(1)
 
         batch, _, _ = predicted_centers.shape
@@ -424,7 +440,7 @@ class BoxDistanceBoxModel(Model):
             (label_boxes.z.unsqueeze(0) < predicted_centers), (predicted_centers < label_boxes.Z.unsqueeze(0))
         )  # .min(dim=-1).values
 
-        dist_outside = torch.sum(torch.logical_not(contained_mask) * dist, dim=-1) / dims
+        dist_outside = aggregate_distances(torch.logical_not(contained_mask) * dist) / dims
 
         label_centers = torch.mean(label_boxes_stack, axis=2)
         dist_inside_contained = (label_centers*contained_mask) - (predicted_centers*contained_mask)
@@ -435,7 +451,7 @@ class BoxDistanceBoxModel(Model):
                 label_boxes.z*torch.logical_not(contained_mask)
         )
 
-        dist_inside = torch.sum(dist_inside_contained + dist_inside_not_contained, dim=-1) / dims
+        dist_inside = aggregate_distances(dist_inside_contained + dist_inside_not_contained) / dims
 
         dist_final = dist_outside + self._alpha*dist_inside
         positives = labels
@@ -518,7 +534,8 @@ class BoxDistanceBoxModel(Model):
 
         if labels is not None:
             # TODO: can just use returned probabilities
-            results["loss"] = self.loss_fn(log_probabilities, labels)
+            # results["loss"] = self.loss_fn(log_probabilities, labels)
+            results["loss"] = loss
 
             if self.debug_level > 0:
                 analyse_tensor(results["loss"], self.debug_level, "loss")

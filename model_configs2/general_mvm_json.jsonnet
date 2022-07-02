@@ -1,6 +1,6 @@
 // env variables
 local root_dir = std.extVar('ROOT_DIR');
-local data_dir = std.extVar('DATA_DIR');
+//local data_dir = std.extVar('DATA_DIR');
 local test = std.extVar('TEST');  // a test run with small dataset
 local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
@@ -10,10 +10,12 @@ local use_wandb = (if test == '1' then false else true);
 local batch_size = std.parseJson(std.extVar('batch_size'));
 
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
+local data_dir = if dataset_name == 'eurlex57k' then '/work/asempruch_umass_edu/datasets' else '/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
 local dataset_reader = std.parseJson(std.extVar('dataset_reader'));
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
-local num_input_features = 1024;
+local transformer_model = std.parseJson(std.extVar('transformer_model'));
+local num_input_features = if transformer_model == "bert-large-uncased" then 1024 else 768;
 
 local scorer = std.parseJson(std.extVar('scorer'));
 local binary_nll_loss = std.parseJson(std.extVar('binary_nll_loss'));
@@ -28,7 +30,6 @@ local ff_linear_layers = std.parseJson(std.extVar('ff_linear_layers'));
 local ff_weight_decay =  std.parseJson(std.extVar('ff_weight_decay'));
 //local ff_weight_decay = 0;
 
-local transformer_model = std.parseJson(std.extVar('transformer_model'));
 
 local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
 {
@@ -39,7 +40,7 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
     tokenizer: {
       type: 'pretrained_transformer',
       model_name: transformer_model,
-      max_length: 2048,
+      max_length: 512,
     },
     token_indexers: {
       text: {
@@ -54,7 +55,7 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
     tokenizer: {
       type: 'pretrained_transformer',
       model_name: transformer_model,
-      max_length: 2048,
+      max_length: 512,
     },
     token_indexers: {
       text: {
@@ -98,6 +99,7 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
       seq2vec_encoder: { // Aggregates token embeddings to one embedding
         type: 'bert_pooler',
         pretrained_model: transformer_model,
+        dropout: 0.1,
       },
     },
     feedforward: {
@@ -120,7 +122,7 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
   data_loader: {
     batch_sampler: {
         type: 'bucket',
-        batch_size: if test == '1' then 3 else batch_size, # TODO: might need to set batch size to 2 for BERT
+        batch_size: if test == '1' then 1 else batch_size, # TODO: might need to set batch size to 2 for BERT
         sorting_keys: ['text'],
     },
     max_instances_in_memory: if test == '1' then 8 else 1000,
@@ -130,12 +132,22 @@ local gain = (if ff_activation == 'tanh' then 5 / 3 else 1);
   trainer: {
     num_epochs: if test == '1' then 20 else 200,
     patience: 8,
+    grad_norm: 1.0,
     validation_metric: '+MAP',
     cuda_device: std.parseInt(cuda_device),
+    learning_rate_scheduler: {
+      type: "slanted_triangular",
+      num_epochs: 10,
+//      num_steps_per_epoch: 3088, TODO: might have to compute this
+      cut_frac: 0.06
+    },
     optimizer: {
-      lr: 0.0001,
-      weight_decay: ff_weight_decay,
-      type: 'adamw',
+//      lr: 0.00001,
+//      weight_decay: ff_weight_decay,
+//      type: 'adamw',
+      "type": "huggingface_adamw",
+      "lr": 1e-5,
+      "weight_decay": 0.1,
     },
     checkpointer: {
       type: 'default',

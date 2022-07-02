@@ -172,10 +172,11 @@ class EurlexReader(DatasetReader):
         """
         for file_count, file_ in self.shard_iterable(enumerate(glob.glob(file_path))):
             logger.info(f"Reading {file_}")
-            with open(file_) as f:
+            with open(file_, mode='r') as f:
                 line = f.readline()
                 example = json.loads(line)
                 instance = self.text_to_instance(**example)
+                f.close()
                 yield instance
             if self.test and file_count > 20:
                 break

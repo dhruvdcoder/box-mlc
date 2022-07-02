@@ -8,7 +8,7 @@ local use_wandb = (if test == '1' then false else true);
 // model class specific variable
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
 local dataset_reader = if dataset_name == 'eurlex57k' then 'eurlex' else 'rcv1';
-local data_dir = if dataset_name == 'eurlex57k' then '/mnt/nfs/scratch1/asempruch/boxem/datasets' else '/mnt/nfs/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
+local data_dir = if dataset_name == 'eurlex57k' then '/work/asempruch_umass_edu/datasets' else '/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
 local num_input_features = dataset_metadata.input_features;
@@ -28,6 +28,8 @@ local delta = 1e-8;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
 local alpha = std.parseJson(std.extVar('alpha'));
 local gamma = std.parseJson(std.extVar('gamma'));
+local distance_type = std.parseJson(std.extVar('distance_type'));
+local num_distance_dims = std.parseJson(std.extVar('num_distance_dims'));
 
 local transformer_model = std.parseJson(std.extVar('transformer_model'));
 
@@ -83,6 +85,8 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     add_new_metrics: false,
     alpha: alpha,
     gamma: gamma,
+    distance_type: distance_type,
+    num_distance_dims: num_distance_dims,
     encoder_stack: {
       debug_level: 0,
       textfield_embedder: {
