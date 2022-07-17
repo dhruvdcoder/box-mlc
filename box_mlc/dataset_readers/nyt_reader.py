@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 class InstanceFields(TypedDict):
     """Contents which form an instance"""
 
-    sentences: ListField  #: it is actually ListField[TextField], one TextField instance per sentence
-    mentions: ListField  #: again ListField[TextField]
+    text: TextField  #: it is actually ListField[TextField], one TextField instance per sentence
+    mentions: TextField  #: again ListField[TextField]
     labels: MultiLabelField  #: types
 
 
@@ -61,6 +61,7 @@ class NytReader(DatasetReader):
         tokenizer: Tokenizer,
         token_indexers: Dict[str, TokenIndexer],
         use_transitive_closure: bool = False,
+        test: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -80,6 +81,7 @@ class NytReader(DatasetReader):
         self._tokenizer = tokenizer
         self._token_indexers = token_indexers
         self._use_transitive_closure = use_transitive_closure
+        self._test = test
 
     def example_to_fields(
         self,
@@ -123,25 +125,25 @@ class NytReader(DatasetReader):
         meta["xml_path"] = xml_path
         meta["taxonomy"] = taxonomy
 
-        sentence_fields = ListField(
-            [
-                TextField(
+        sentence_fields = TextField(
+            # [
+            #     TextField(
                     self._tokenizer.tokenize(text)
-                )
-            ]
+                # )
+            # ]
         )
-        mention_fields = ListField(
-            [
-                TextField(
+        mention_fields = TextField(
+            # [
+            #     TextField(
                     self._tokenizer.tokenize(title)
-                )
-            ]
+                # )
+            # ]
         )
         # need to use MultiLabelField
         labels = MultiLabelField(labels)
 
         return {
-            "sentences": sentence_fields,
+            "text": sentence_fields,
             "mentions": mention_fields,
             "labels": labels,
         }
@@ -192,18 +194,20 @@ class NytReader(DatasetReader):
             data instances
 
         """
-        for file_ in glob.glob(file_path, flags=glob.EXTGLOB):
+        for file_ in glob.glob(file_path):
             logger.info(f"Reading {file_}")
             with open(file_) as f:
-                for line in self.shard_iterable(f.readlines()):
+                for idx, line in enumerate(self.shard_iterable(f.readlines())):
+                    if self._test and idx >= 50:
+                        break
                     example = json.loads(line)
                     instance = self.text_to_instance(**example)
                     yield instance
 
     def apply_token_indexers(self, instance: Instance) -> None:
-        for sentence, mention in zip(
-            instance["sentences"].field_list,
-            instance["mentions"].field_list,
-        ):
-            sentence.token_indexers = self._token_indexers
-            mention.token_indexers = self._token_indexers
+        # for sentence, mention in zip(
+        #     instance["text"].field_list,
+        #     instance["mentions"].field_list,
+        # ):
+        instance["text"].token_indexers = self._token_indexers
+        instance["mentions"].token_indexers = self._token_indexers

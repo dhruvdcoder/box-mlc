@@ -74,17 +74,17 @@ class BoxDistanceBoxModel(Model):
     as well.
     """
 
-    @torch.no_grad()
-    def get_min_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
-        adj_T = (self.adj.transpose(0, 1))[None, :, :]
-
-        return ((adj_T * scores[:, None, :]).min(dim=-1)[0]).detach()
-
-    @torch.no_grad()
-    def get_max_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
-        adj = (self.adj)[None, :, :]
-
-        return ((adj * scores[:, None, :]).max(dim=-1)[0]).detach()
+    # @torch.no_grad()
+    # def get_min_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
+    #     adj_T = (self.adj.transpose(0, 1))[None, :, :]
+    #
+    #     return ((adj_T * scores[:, None, :]).min(dim=-1)[0]).detach()
+    #
+    # @torch.no_grad()
+    # def get_max_normalized_scores(self, scores: torch.Tensor) -> torch.Tensor:
+    #     adj = (self.adj)[None, :, :]
+    #
+    #     return ((adj * scores[:, None, :]).max(dim=-1)[0]).detach()
 
     def get_device(self):
         for p in self._label_embeddings.parameters():
@@ -93,7 +93,6 @@ class BoxDistanceBoxModel(Model):
     def __init__(
         self,
         vocab: Vocabulary,
-        encoder_stack: MultiInstanceTypingEncoder,
         feedforward: FeedForward,
         vec2box: Vec2Box,
         intersect: Intersection,
@@ -104,6 +103,7 @@ class BoxDistanceBoxModel(Model):
         distance_type: str = 'l1',
         num_distance_dims: int = 0,
         dropout: float = None,
+        encoder_stack: Optional[MultiInstanceTypingEncoder] = None,
         constraint_violation: Optional[ConstraintViolationMetric] = None,
         regularizer: Optional[RegularizerApplicator] = None,
         label_box_regularizer: Optional[BoxRegularizer] = None,
@@ -115,7 +115,7 @@ class BoxDistanceBoxModel(Model):
         visualization_mode: bool = False,
         avg_vector: bool = True,
         initializer: Optional[InitializerApplicator] = None,
-        add_new_metrics: bool = True,
+        add_new_metrics: bool = False,
         **kwargs: Any,
     ) -> None:
         # TODO: look at baseline papers, decide if title is neccessary
@@ -204,7 +204,7 @@ class BoxDistanceBoxModel(Model):
         super().__init__(vocab=vocab, regularizer=regularizer)
         self._encoder = encoder_stack
         # TODO: remove sentence output order property
-        assert self._encoder.sentences_output_order == 2
+        # assert self._encoder.sentences_output_order == 2
         self._alpha = alpha
         self._gamma = gamma
         self._dropout = (
@@ -361,7 +361,7 @@ class BoxDistanceBoxModel(Model):
 
     def get_scores(  # type:ignore
         self,
-        text: TextFieldTensors,
+        x: TextFieldTensors,
         labels: torch.Tensor,
         meta: List[Dict[str, Any]],
         results: Dict,
@@ -369,7 +369,7 @@ class BoxDistanceBoxModel(Model):
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
-            text: Nested dict of Tensors corresponding to the text/sentences.
+            x: Nested dict of Tensors corresponding to the text/sentences.
                 Each value tensor will be of shape (batch, sentences, seq_len), where sentences is bag_size.
             mentions: Same as sentences but only contains tensors for surface mention
             labels: Tensor containing one-hot labels. Has shape (batch, label_set_size).
@@ -385,8 +385,8 @@ class BoxDistanceBoxModel(Model):
         if self.debug_level >= 2:
             torch.autograd.set_detect_anomaly(True)
         encoded_vec = self._encoder(
-            text
-        )  # shapes (batch, sentences, hidden_size)
+            x
+        ) if self._encoder else x  # shapes (batch, sentences, hidden_size)
 
         if self._dropout:
             encoded_vec = self._dropout(encoded_vec)
@@ -398,19 +398,6 @@ class BoxDistanceBoxModel(Model):
         )  # box_shape (total_labels, box_size)
 
         num_labels, dims = label_boxes.box_shape
-
-        # if self.visualization_mode:
-        #     # in vis mode we assume that batch size is 1
-        #     results[
-        #         "x_boxes_z"
-        #     ] = predicted_label_boxes.z  # Shape: (batch=1, box_size)
-        #     results["x_boxes_Z"] = predicted_label_boxes.Z
-        #     # we need to add one extra dim with size 1 in the begining to fool the
-        #     # forward_on_instances() to think it is batch dim
-        #     results["y_boxes_z"] = label_boxes.z.unsqueeze(
-        #         0
-        #     )  # Shape: (batch=1,labels, box_size)
-        #     results["y_boxes_Z"] = label_boxes.Z.unsqueeze(0)
 
         # Stack z and Z tensors and take mean across newly added dimension
 
@@ -491,16 +478,16 @@ class BoxDistanceBoxModel(Model):
             self.constraint_violation_metric(results["scores"], labels)
 
         # TODO: remove these metrics and replace with the ones from the feature box model
-        if self.add_new_metrics:
-            s = self.get_min_normalized_scores(results["scores"])
-            p = self.get_min_normalized_scores(results["positive_probs"])
-            self.map_min_n(s, labels)
-            self.f1_min_n(p, labels)
-            self.micro_macro_f1_min_n(p, labels)
+        # if self.add_new_metrics:
+            # s = self.get_min_normalized_scores(results["scores"])
+            # p = self.get_min_normalized_scores(results["positive_probs"])
+            # self.map_min_n(s, labels)
+            # self.f1_min_n(p, labels)
+            # self.micro_macro_f1_min_n(p, labels)
 
     def forward(  # type:ignore
         self,
-        text: TextFieldTensors,
+        x: TextFieldTensors,
         labels: torch.Tensor,
         meta: List[Dict[str, Any]],
         **kwargs: Any,
@@ -518,7 +505,7 @@ class BoxDistanceBoxModel(Model):
 
         results: Dict[str, Any] = {"meta": meta}
         log_probabilities, loss = self.get_scores(
-            text, labels, meta, results, **kwargs
+            x, labels, meta, results, **kwargs
         )
 
         # loss and metrics

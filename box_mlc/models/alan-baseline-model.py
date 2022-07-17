@@ -17,6 +17,9 @@ from box_mlc.metrics.micro_average_precision import MicroAvgPrecision
 from box_mlc.modules.box_embedding import BoxEmbeddingModule
 from box_mlc.modules.binary_nll_loss import BinaryNLLLoss
 from box_mlc.modules.vector2box import Vec2Box
+from box_mlc.modules.multi_instance_typing_encoder import (
+    MultiInstanceTypingEncoder,
+)
 
 from box_embeddings.modules.intersection import Intersection
 from box_embeddings.modules.volume import Volume
@@ -35,6 +38,7 @@ class AlanBaselineModel(Model):
         vec2box: Vec2Box,
         intersect: Intersection,
         volume: Volume,
+        encoder_stack: Optional[MultiInstanceTypingEncoder] = None,
         initializer: Optional[InitializerApplicator] = None,
         visualization_mode: bool = True,
     ) -> None:
@@ -45,6 +49,7 @@ class AlanBaselineModel(Model):
         self._volume = volume
         self._intersect = intersect
         self._vec2box = vec2box
+        self._encoder = encoder_stack
         self._label_embeddings = label_embeddings
         self._feedforward = feedforward
         self.loss_fn = BinaryNLLLoss()
@@ -68,6 +73,9 @@ class AlanBaselineModel(Model):
         results: Dict,
     ) -> torch.Tensor:
         self.current_labels = labels
+
+        if self._encoder:
+            x = self._encoder(x)
 
         predicted_label_reps = self._feedforward(x).unsqueeze(-2)
         batch, _, hidden_dims = predicted_label_reps.shape

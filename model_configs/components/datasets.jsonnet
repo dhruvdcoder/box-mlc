@@ -381,4 +381,18 @@
     validation_file: 'dev/*.json',
     test_file: 'test/*.json'
   },
+  metashift: {
+    num_labels: 4271,
+    input_features: 2,
+    dir_name: 'huggingface/metashift',
+    train_file: '',
+  },
+  nyt: {
+    num_labels: 4271,
+    input_features: 2,
+    dir_name: 'nyt',
+    train_file: 'nyt-fold-[0-6].jsonl',
+    validation_file: 'nyt-fold-[7-8].jsonl',
+    test_file: 'nyt-fold-9.jsonl',
+  },
 }

@@ -7,7 +7,7 @@ local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
 // model class specific variable
 local dataset_name = std.parseJson(std.extVar('dataset_name'));
-local dataset_reader = if dataset_name == 'eurlex57k' then 'eurlex' else 'rcv1';
+local dataset_reader = std.parseJson(std.extVar('dataset_reader'));
 local data_dir = if dataset_name == 'eurlex57k' then '/work/asempruch_umass_edu/datasets' else '/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
 local dataset_metadata = (import '../model_configs/components/datasets.jsonnet')[dataset_name];
 local num_labels = dataset_metadata.num_labels;
@@ -158,7 +158,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     num_workers: 4 # and request proportional number of cpus from gypsum
   },
   trainer: {
-    num_epochs: if test == '1' then 20 else 200,
+    num_epochs: if test == '1' then 20 else 2000,
     grad_norm: 10.0,
     patience: patience,
     validation_metric: '+MAP',
