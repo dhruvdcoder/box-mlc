@@ -34,7 +34,7 @@ class ErrorAnalyzer(BoxVisualizer):
 
     def _construct_adjacency_matrix(self):
         adjacency_matrix = cp.zeros([len(self.vocab)] * 2, dtype=bool)
-        with open('/mnt/nfs/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data/expr_FUN/hierarchy_tc.edgelist', mode='r') as f:
+        with open('/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data/expr_FUN/hierarchy_tc.edgelist', mode='r') as f:
             for line in f:
                 a_label, b_label, _ = line.split(' ')
                 try:
@@ -185,22 +185,22 @@ class ErrorAnalyzer(BoxVisualizer):
 if __name__ == "__main__":
     # %% Two class y_boxes
     box_analyzer = ErrorAnalyzer(
-        '/mnt/nfs/scratch1/asempruch/1750',
+        '/gypsum/scratch1/asempruch/1750',
         name='Box Model',
         dims=range(0, 4)
     )
     vec_analyzer = ErrorAnalyzer(
-        '/mnt/nfs/scratch1/asempruch/boxem/mvm_best',
+        '/gypsum/scratch1/asempruch/boxem/mvm_best',
         name='Vector Model',
         dims=range(0, 4)
     )
     hierarchy_analyzer = ErrorAnalyzer(
-        '/mnt/nfs/scratch1/asempruch/boxem/hierarchy_loss',
+        '/gypsum/scratch1/asempruch/boxem/hierarchy_loss',
         name='Hierarchy Loss',
         dims=range(0, 4)
     )
     cone_analyzer = ErrorAnalyzer(
-        '/mnt/nfs/scratch1/asempruch/boxem/cone',
+        '/gypsum/scratch1/asempruch/boxem/cone',
         name='Cones',
         dims=range(0, 4)
     )

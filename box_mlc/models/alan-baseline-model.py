@@ -134,7 +134,7 @@ class AlanBaselineModel(Model):
         results["scores"] = log_probabilities
         results["positive_probs"] = torch.exp(log_probabilities)
 
-        results["loss"] = self.loss_fn(log_probabilities, labels)
+        results["loss"] = self.loss_fn(log_probabilities, labels) # + L1_on_theta_params
 
         self.compute_metrics(results, labels)
 

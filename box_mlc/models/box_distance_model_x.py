@@ -66,7 +66,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@Model.register("box-distance-box-model")
+@Model.register("box-distance-box-model-x")
 class BoxDistanceBoxModel(Model):
     """Does multi-instance entity typing as multilabel classification.
     Uses the same encoding stack as :class:`MultiInstanceTyping` model.
@@ -102,6 +102,7 @@ class BoxDistanceBoxModel(Model):
         gamma: float,
         distance_type: str = 'l1',
         num_distance_dims: int = 0,
+        distances_sorted_dims: bool = False,
         dropout: float = None,
         encoder_stack: Optional[MultiInstanceTypingEncoder] = None,
         constraint_violation: Optional[ConstraintViolationMetric] = None,
@@ -218,6 +219,7 @@ class BoxDistanceBoxModel(Model):
         self._label_box_regularizer = label_box_regularizer
         self._distance_type = distance_type
         self._num_distance_dims = num_distance_dims
+        self._distances_sorted_dims = distances_sorted_dims
         self.debug_level = debug_level
         self.visualization_mode = visualization_mode
         self.loss_fn = BinaryNLLLoss()
@@ -392,10 +394,18 @@ class BoxDistanceBoxModel(Model):
             encoded_vec = self._dropout(encoded_vec)
 
         predicted_label_reps = self._feedforward(encoded_vec)
+        predicted_label_boxes = self._vec2box(predicted_label_reps)
+        # results["x_boxes_z"] = predicted_label_reps
 
         label_boxes: BoxTensor = (
             self._label_embeddings.all_boxes
         )  # box_shape (total_labels, box_size)
+
+        results["x_boxes_z"] = predicted_label_boxes.z
+        results["x_boxes_Z"] = predicted_label_boxes.Z
+
+        results["y_boxes_z"] = label_boxes.z.unsqueeze(0)
+        results["y_boxes_Z"] = label_boxes.Z.unsqueeze(0)
 
         num_labels, dims = label_boxes.box_shape
 
@@ -432,10 +442,10 @@ class BoxDistanceBoxModel(Model):
         dist_inside_contained = (label_centers*contained_mask) - (predicted_centers*contained_mask)
 
         dist_inside_not_contained = (
-                label_centers*torch.logical_not(contained_mask)
-        ) - (
-                label_boxes.z*torch.logical_not(contained_mask)
-        )
+                                            label_centers*torch.logical_not(contained_mask)
+                                    ) - (
+                                            label_boxes.z*torch.logical_not(contained_mask)
+                                    )
 
         dist_inside = aggregate_distances(dist_inside_contained + dist_inside_not_contained) / dims
 
@@ -486,7 +496,7 @@ class BoxDistanceBoxModel(Model):
 
     def forward(  # type:ignore
         self,
-        text: TextFieldTensors,
+        x: torch.Tensor,
         labels: torch.Tensor,
         meta: List[Dict[str, Any]],
         **kwargs: Any,
@@ -504,7 +514,7 @@ class BoxDistanceBoxModel(Model):
 
         results: Dict[str, Any] = {"meta": meta}
         log_probabilities, loss = self.get_scores(
-            text, labels, meta, results, **kwargs
+            x, labels, meta, results, **kwargs
         )
 
         # loss and metrics

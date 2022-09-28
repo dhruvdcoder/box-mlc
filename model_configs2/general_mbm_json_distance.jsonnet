@@ -44,11 +44,11 @@ local delta = 1e-8;
 local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
 //local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
-local distance_weight = std.parseJson(std.extVar('distance_weight'));
-local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
-//local box_weight_decay = 0;
-//local box_weight_decay = 0;
-//local final_activation = if std.parseJson(std.extVar('ff_same_final_activation')) then ff_activation else 'linear';
+local alpha = std.parseJson(std.extVar('alpha'));
+local gamma = std.parseJson(std.extVar('gamma'));
+local distance_type = std.parseJson(std.extVar('distance_type'));
+local num_distance_dims = std.parseJson(std.extVar('num_distance_dims'));
+local distances_sorted_dims = std.parseJson(std.extVar('distances_sorted_dims'));
 local final_activation = ff_activation;
 
 local transformer_model = std.parseJson(std.extVar('transformer_model'));
@@ -98,16 +98,6 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
         type: 'pretrained_transformer',
         model_name: transformer_model,
       },
-//        type: 'single_id',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
-//      [if add_position_features then 'positions']: {
-//        type: 'single_id',
-//        namespace: 'positions',
-//        feature_name: 'position',
-//        default_value: '0',
-//        token_min_padding_length: cnn_kernel_size,
-//      },
     },
     test: if test == '1' then true else false,
   },
@@ -119,9 +109,14 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-    type: 'multi-instance-typing-box-model',
+    type: 'box-distance-box-model',
     debug_level: 0,
     add_new_metrics: false,
+    alpha: alpha,
+    gamma: gamma,
+    distance_type: distance_type,
+    num_distance_dims: num_distance_dims,
+    distances_sorted_dims: distances_sorted_dims,
     encoder_stack: {
       debug_level: 0,
       textfield_embedder: {

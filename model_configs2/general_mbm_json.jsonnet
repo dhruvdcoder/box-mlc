@@ -52,6 +52,7 @@ local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
 local final_activation = ff_activation;
 
 local transformer_model = std.parseJson(std.extVar('transformer_model'));
+local visualization_mode = std.parseJson(std.extVar('visualization_mode'));
 
 local cnn_kernel_size = 64;
 local position_emb_size = 64;
@@ -122,6 +123,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
     type: 'multi-instance-typing-box-model',
     debug_level: 0,
     add_new_metrics: false,
+    visualization_mode: visualization_mode,
     encoder_stack: {
       debug_level: 0,
       textfield_embedder: {

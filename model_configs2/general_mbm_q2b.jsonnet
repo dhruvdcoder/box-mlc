@@ -1,6 +1,6 @@
 // env variables
-local root_dir = '/home/asempruch/boxem/box-mlc';
-local data_dir = '/gypsum/scratch1/dhruveshpate/multilabel_classification/multilabel-learning/.data';
+local root_dir = std.extVar('ROOT_DIR');
+local data_dir = std.parseJson(std.extVar('DATA_DIR'));
 local test = std.extVar('TEST');  // a test run with small dataset
 local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
@@ -45,14 +45,17 @@ local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
 //local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
 local distance_weight = std.parseJson(std.extVar('distance_weight'));
-local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
-local alpha = std.parseJson(std.extVar('alpha'));
-local gamma = std.parseJson(std.extVar('gamma'));
-local num_distance_dims = std.parseJson(std.extVar('num_distance_dims'));
+//local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
 //local box_weight_decay = 0;
 //local box_weight_decay = 0;
 //local final_activation = if std.parseJson(std.extVar('ff_same_final_activation')) then ff_activation else 'linear';
 local final_activation = ff_activation;
+
+// Query2Box distance scoring
+local alpha = std.parseJson(std.extVar('alpha'));
+local gamma = std.parseJson(std.extVar('gamma'));
+local num_distance_dims = std.parseJson(std.extVar('num_distance_dims'));
+local distance_type = std.parseJson(std.extVar('distance_type'));
 
 local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 {
@@ -74,9 +77,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-//    type: 'alan-baseline-model',
     type: 'box-distance-box-model-x',
-//    debug_level: 0,
     alpha: alpha,
     gamma: gamma,
     num_distance_dims: num_distance_dims,
@@ -86,7 +87,6 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
       //hidden_dims: [ff_hidden*step_up, ff_hidden],
       //activations: [ff_activation, ff_activation],
       //dropout: [ff_dropout, ff_dropout],
-      // TODO: reduce ff_hidden and box_space_dim
       hidden_dims: [ff_hidden for i in std.range(0, ff_linear_layers - 2)] + [box_space_dim],
       activations: ([ff_activation for i in std.range(0, ff_linear_layers - 2)] + [final_activation]),
       dropout: ff_dropout,
@@ -103,7 +103,12 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
       },
     },
     intersect: { type: 'gumbel', beta: gumbel_beta, approximation_mode: 'clipping' },
-    volume: { type: 'bessel-approx', log_scale: true, beta: volume_temp, gumbel_beta: gumbel_beta },
+    volume: {
+        type: 'bessel-approx',
+        log_scale: true,
+        beta: volume_temp,
+        gumbel_beta: gumbel_beta
+    },
     label_embeddings: {
       type: 'box-embedding-module',
       embedding_dim: box_space_dim,
@@ -113,6 +118,14 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 //        type: 'networkx-edgelist',
 //        filepath: data_dir + '/' + dataset_metadata.dir_name + '/' + 'hierarchy.edgelist',
 //      },
+//    },
+//    loss_fn: {
+//      type: 'binary-nllloss'
+//    },
+//    loss_fn: {
+//      type: 'binary-nll-hierarchy-loss',
+//      distance_weight: distance_weight,
+//      exponential_scaling: exponential_scaling
 //    },
     initializer: {
       regexes: [
@@ -135,14 +148,13 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
         ],
       ],
     },
-
   },
   data_loader: {
     shuffle: true,
     batch_size: 16,
   },
   trainer: {
-    num_epochs: if test == '1' then 20 else 2000,
+    num_epochs: if test == '1' then 20 else 200,
     grad_norm: 10.0,
     patience: patience,
     validation_metric: '+MAP',

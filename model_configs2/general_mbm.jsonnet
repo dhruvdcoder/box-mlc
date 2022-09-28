@@ -1,6 +1,6 @@
 // env variables
 local root_dir = std.extVar('ROOT_DIR');
-local data_dir = std.extVar('DATA_DIR');
+local data_dir = std.parseJson(std.extVar('DATA_DIR'));
 local test = std.extVar('TEST');  // a test run with small dataset
 local cuda_device = std.extVar('CUDA_DEVICE');
 local use_wandb = (if test == '1' then false else true);
@@ -45,11 +45,16 @@ local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
 //local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
 local distance_weight = std.parseJson(std.extVar('distance_weight'));
-local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
+//local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
 //local box_weight_decay = 0;
 //local box_weight_decay = 0;
 //local final_activation = if std.parseJson(std.extVar('ff_same_final_activation')) then ff_activation else 'linear';
 local final_activation = ff_activation;
+
+// Dimension distribution
+local dimension_dist = std.parseJson(std.extVar('dimension_dist'));
+local dimension_dist_regularization = std.parseJson(std.extVar('dimension_dist_regularization'));
+local dimension_dist_init = std.parseJson(std.extVar('dimension_dist_init'));
 
 local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 {
@@ -71,16 +76,13 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-//    type: 'alan-baseline-model',
-    type: 'alan-hierarchy-loss-model',
-//    debug_level: 0,
+    type: 'alan-baseline-model',
     feedforward: {
       input_dim: num_input_features,
       num_layers: ff_linear_layers,
       //hidden_dims: [ff_hidden*step_up, ff_hidden],
       //activations: [ff_activation, ff_activation],
       //dropout: [ff_dropout, ff_dropout],
-      // TODO: reduce ff_hidden and box_space_dim
       hidden_dims: [ff_hidden for i in std.range(0, ff_linear_layers - 2)] + [box_space_dim],
       activations: ([ff_activation for i in std.range(0, ff_linear_layers - 2)] + [final_activation]),
       dropout: ff_dropout,
@@ -97,7 +99,21 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
       },
     },
     intersect: { type: 'gumbel', beta: gumbel_beta, approximation_mode: 'clipping' },
-    volume: { type: 'bessel-approx', log_scale: true, beta: volume_temp, gumbel_beta: gumbel_beta },
+    volume: if dimension_dist
+            then {
+                type: 'dimension-dist',
+                dim: ff_hidden,
+                regularization: dimension_dist_regularization,
+                init: dimension_dist_init,
+                log_scale: true,
+                beta: volume_temp,
+                gumbel_beta: gumbel_beta
+            } else {
+                type: 'bessel-approx',
+                log_scale: true,
+                beta: volume_temp,
+                gumbel_beta: gumbel_beta
+            },
     label_embeddings: {
       type: 'box-embedding-module',
       embedding_dim: box_space_dim,
@@ -108,11 +124,14 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 //        filepath: data_dir + '/' + dataset_metadata.dir_name + '/' + 'hierarchy.edgelist',
 //      },
 //    },
-    loss_fn: {
-      type: 'binary-nll-hierarchy-loss',
-      distance_weight: distance_weight,
-      exponential_scaling: exponential_scaling
-    },
+//    loss_fn: {
+//      type: 'binary-nllloss'
+//    },
+//    loss_fn: {
+//      type: 'binary-nll-hierarchy-loss',
+//      distance_weight: distance_weight,
+//      exponential_scaling: exponential_scaling
+//    },
     initializer: {
       regexes: [
         [@'.*linear_layers.*weight', (if std.member(['tanh', 'sigmoid'], ff_activation) then { type: 'xavier_uniform', gain: gain } else { type: 'kaiming_uniform', nonlinearity: 'relu' })],
@@ -134,7 +153,6 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
         ],
       ],
     },
-
   },
   data_loader: {
     shuffle: true,
