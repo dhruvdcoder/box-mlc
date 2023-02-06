@@ -44,7 +44,11 @@ local delta = 1e-8;
 local label_delta_init = std.parseJson(std.extVar('label_delta_init'));
 //local label_delta_init = 0.1;
 local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
-//local distance_weight = std.parseJson(std.extVar('distance_weight'));
+local distance_weight = std.parseJson(std.extVar('distance_weight'));
+
+local nn_pruning_ratio = std.parseJson(std.extVar('nn_pruning_ratio'));
+local nn_reverse_variance = std.parseJson(std.extVar('nn_reverse_variance'));
+local nn_strict_containment = std.parseJson(std.extVar('nn_strict_containment'));
 //local exponential_scaling = std.parseJson(std.extVar('exponential_scaling'));
 //local box_weight_decay = 0;
 //local box_weight_decay = 0;
@@ -52,9 +56,9 @@ local box_weight_decay = std.parseJson(std.extVar('box_weight_decay'));
 local final_activation = ff_activation;
 
 // Dimension distribution
-local dimension_dist = std.parseJson(std.extVar('dimension_dist'));
-local dimension_dist_regularization = std.parseJson(std.extVar('dimension_dist_regularization'));
-local dimension_dist_init = std.parseJson(std.extVar('dimension_dist_init'));
+//local dimension_dist = std.parseJson(std.extVar('dimension_dist'));
+//local dimension_dist_regularization = std.parseJson(std.extVar('dimension_dist_regularization'));
+//local dimension_dist_init = std.parseJson(std.extVar('dimension_dist_init'));
 
 local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
 {
@@ -76,7 +80,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
                    dataset_metadata.test_file),
 
   model: {
-    type: 'alan-baseline-model',
+    type: 'alan-pruning-model',
     feedforward: {
       input_dim: num_input_features,
       num_layers: ff_linear_layers,
@@ -87,6 +91,12 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
       activations: ([ff_activation for i in std.range(0, ff_linear_layers - 2)] + [final_activation]),
       dropout: ff_dropout,
       //dropout: ([ff_dropout for i in std.range(0, ff_linear_layers - 2)] + [0]),
+    },
+    nn_filter: {
+        type: 'nearest-neighbor-filter',
+        pruning_ratio: nn_pruning_ratio,
+        reverse_variance: nn_reverse_variance,
+        strict_containment: nn_strict_containment
     },
     vec2box: {
       type: 'vec2box',
@@ -99,21 +109,12 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
       },
     },
     intersect: { type: 'gumbel', beta: gumbel_beta, approximation_mode: 'clipping' },
-    volume: if dimension_dist
-            then {
-                type: 'dimension-dist',
-                dim: ff_hidden,
-                regularization: dimension_dist_regularization,
-                init: dimension_dist_init,
-                log_scale: true,
-                beta: volume_temp,
-                gumbel_beta: gumbel_beta
-            } else {
-                type: 'bessel-approx',
-                log_scale: true,
-                beta: volume_temp,
-                gumbel_beta: gumbel_beta
-            },
+    volume: {
+        type: 'bessel-approx',
+        log_scale: true,
+        beta: volume_temp,
+        gumbel_beta: gumbel_beta
+    },
     label_embeddings: {
       type: 'box-embedding-module',
       embedding_dim: box_space_dim,
@@ -156,7 +157,7 @@ local gain = if ff_activation == 'tanh' then 5 / 3 else 1;
   },
   data_loader: {
     shuffle: true,
-    batch_size: 16,
+    batch_size: 1,
   },
   trainer: {
     num_epochs: if test == '1' then 20 else 200,

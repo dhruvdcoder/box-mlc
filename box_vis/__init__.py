@@ -17,8 +17,6 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 import numpy as np
-import cupy as cp
-from os.path import exists
 import pickle
 
 import_module_and_submodules("box_mlc")
@@ -570,7 +568,7 @@ class BoxVisualizer:
 if __name__ == "__main__":
 
     cone_visualizer = BoxVisualizer(
-        '/mnt/nfs/scratch1/asempruch/boxem/cone',
+        '/gypsum/scratch1/asempruch/boxem/cone',
         name='Cone',
         dims=range(1000, 1004)
     )
@@ -588,7 +586,7 @@ if __name__ == "__main__":
 
     # %% Two class y_boxes
     box_visualizer = BoxVisualizer(
-        '/mnt/nfs/scratch1/asempruch/1750',
+        '/gypsum/scratch1/asempruch/1750',
         name='Box Model',
         dims=range(0, 4)
     )
@@ -624,7 +622,7 @@ if __name__ == "__main__":
     # %%
 
     # hierarchy_visualizer = BoxVisualizer(
-    #     '/mnt/nfs/scratch1/asempruch/boxem/hierarchy_loss',
+    #     '/gypsum/scratch1/asempruch/boxem/hierarchy_loss',
     #     name='Hierarchy Loss Box Model',
     #     dims=range(0, 4)
     # )

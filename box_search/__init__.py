@@ -2,11 +2,12 @@ import json
 import logging
 import pickle
 from typing import List, Dict, Tuple, Iterable, Optional
+import os
+import time
 
-from sparsemax.sparsemax import SparsemaxFunction
-
-SparsemaxFunction
+import ast
 import numpy as np
+import wandb
 from allennlp.models.archival import load_archive
 from allennlp.predictors.predictor import Predictor
 from allennlp.common.util import import_module_and_submodules
@@ -19,6 +20,7 @@ from box_embeddings.modules.intersection.gumbel_intersection import GumbelInters
 from box_embeddings.modules.volume.soft_volume import SoftVolume
 from sklearn.metrics import f1_score, average_precision_score, ndcg_score
 import_module_and_submodules("box_mlc")
+import argparse
 
 logger = logging.getLogger("box_search")
 
@@ -139,7 +141,7 @@ class BoxSearcherBase:
         if "x_box" in predictions[0]:
             self.total_dims = predictions[0]["x_box"].box_shape[0]
 
-    def get_variance_by_dim(self) -> torch.sort:
+    def get_variance_by_dim(self, print_graphs=False) -> torch.sort:
 
         if self.variance_by_dim:
             return self.variance_by_dim
@@ -151,8 +153,8 @@ class BoxSearcherBase:
         )
 
         intersec = self.predictor._model._intersect
-        # volume = self.predictor._model._volume
-        volume = SoftVolume()
+        volume = self.predictor._model._volume
+        # volume = SoftVolume()
 
         intersection_all_boxes: BoxTensor = intersec(
             BoxTensor(all_boxes.data.unsqueeze(0)),
@@ -174,36 +176,31 @@ class BoxSearcherBase:
             (0, 1)
         )
 
-        var_sort = torch.sort(var, descending=True)
+        var_sort = torch.sort(var, descending=(not args.rev_var))
         self.variance_by_dim = var_sort
 
         """Analysis"""
         # Intersection per box per dimension
-        # plt.imshow(
-        #     torch.sort(
-        #         torch.var(intersection_volume_by_dim, [0]),
-        #         -1,
-        #         descending=True
-        #     ).values,
-        #     cmap='autumn',
-        #     interpolation='none'
-        # )
-        # plt.show()
-        #
-        # # Overall variance per dimension
-        # plt.bar(
-        #     range(len(var_sort.values)),
-        #     var_sort.values
-        # )
-        # plt.show()
+        if print_graphs:
+            plt.imshow(
+                torch.sort(
+                    torch.var(intersection_volume_by_dim, [0]),
+                    -1,
+                    descending=True
+                ).values,
+                cmap='autumn',
+                interpolation='none'
+            )
+            plt.show()
 
+            # Overall variance per dimension
+            plt.bar(
+                range(len(var_sort.values)),
+                var_sort.values
+            )
+            plt.show()
 
         return self.variance_by_dim
-
-    def analyze_variance(self):
-
-        variance_by_dim = self.get_variance_by_dim()
-
 
     def search(
             self,
@@ -213,15 +210,19 @@ class BoxSearcherBase:
             include_pruning_history=False
     ):
 
-        var_argsort = self.get_variance_by_dim()  # alg: determine variance of intersection of label boxes and obtain argsort
+        if args.dist and hasattr(self.predictor._model, '_volume') and hasattr(self.predictor._model._volume, '_dimension_dist'):
+            dim_dist_vector = self.predictor._model._volume._dimension_dist.detach()
+            var_argsort = torch.sort(dim_dist_vector, descending=(not args.rev_var))
+        else:
+            var_argsort = self.get_variance_by_dim()  # alg: determine variance of intersection of label boxes and obtain argsort
 
         """ Containment Mask """
 
         num_pruned = 0  # alg: initialize counter to keep track of number of pruned boxes
         sort_rank = 0  # alg: initialize counter to keep track of current rank position of current dimension in sorted dimensions used for pruning
-        target_pruned = round(self.pruning_ratio*len(self.y_boxes))  # alg: compute target number of boxes to prune based on specified pruning ratio
+        target_pruned = round(self.pruning_ratio*all_boxes.box_shape[0])  # alg: compute target number of boxes to prune based on specified pruning ratio
 
-        containment_mask = torch.ones(len(self.y_boxes), dtype=torch.bool)  # alg: initialize containment mask (represents which boxes are contained within target box in current dimension)
+        containment_mask = torch.ones(all_boxes.box_shape[0], dtype=torch.bool)  # alg: initialize containment mask (represents which boxes are contained within target box in current dimension)
 
         containment_mask_history = list()
 
@@ -241,16 +242,28 @@ class BoxSearcherBase:
 
             # TODO: contained mask should reflect containment of box
             ## in target box slices across ALL dimensions
-            _containment_mask = torch.logical_or(  # alg: determine containment mask of target box within label boxes only in current filter dimension
-                torch.logical_and(
-                    all_boxes.z[:, filter_dims] >= target.z[filter_dims],
-                    all_boxes.z[:, filter_dims] <= target.Z[filter_dims]
-                ),
-                torch.logical_and(
-                    all_boxes.Z[:, filter_dims] >= target.z[filter_dims],
-                    all_boxes.Z[:, filter_dims] <= target.Z[filter_dims]
-                )
+
+            # strict_containment
+            _containment_mask = torch.logical_and(  # completely contained
+                all_boxes.z[:, filter_dims] <= target.z[filter_dims],
+                all_boxes.Z[:, filter_dims] >= target.Z[filter_dims]
             )
+
+            if not args.strict_containment:
+                # alg: determine containment mask of target box within label boxes only in current filter dimension
+                _containment_mask = torch.logical_or(
+                    _containment_mask,
+                    torch.logical_or(
+                        torch.logical_and(  # intersects on left side
+                            all_boxes.z[:, filter_dims] >= target.z[filter_dims],
+                            all_boxes.z[:, filter_dims] <= target.Z[filter_dims]
+                        ),
+                        torch.logical_and(  # intersects on right side
+                            all_boxes.Z[:, filter_dims] >= target.z[filter_dims],
+                            all_boxes.Z[:, filter_dims] <= target.Z[filter_dims]
+                        )
+                    )
+                )
 
             _containment_mask = torch.logical_and(  # alg: logical and current containment mask with mask from previous iterations
                 _containment_mask, containment_mask
@@ -275,8 +288,8 @@ class BoxSearcherBase:
             all_boxes.data[contained_index]
         )  # alg: get non-pruned boxes
 
-        # volume = self.predictor._model._volume
-        volume = SoftVolume()
+        volume = self.predictor._model._volume
+        # volume = SoftVolume()
         intersec = self.predictor._model._intersect
 
         scores: Tensor = volume(
@@ -309,10 +322,12 @@ class BoxSearcherBase:
 def evaluate_search(
     searcher: BoxSearcherBase,
     k: int,
-    all_boxes: BoxTensor,
+    # all_boxes: BoxTensor,
 ):
-    all_scores = {
+    local_score_history = {
         'label': list(),
+        'scores': list(),
+        'indices': list(),
         'containment_history': list(),
         'f1': list(),
         'positive_overlap': list(),
@@ -320,19 +335,29 @@ def evaluate_search(
         'ap': list()
     }
 
-    for label in searcher.y_boxes.keys():  # alg: iterate over all label boxes treating each as target box
-        target = searcher.y_boxes[label]
-        (scores, indices), containment_history = searcher.search(
+    # for pred_data in searcher.predictions:  # alg: iterate over all x boxes treating each as target box
+    #     target = pred_data['x_box']
+    targets = searcher.y_boxes.items() if args.target == 'y' else [(idx, pred_data['x_box']) for (idx, pred_data) in enumerate(searcher.predictions)]
+    for label, target in targets:
+        all_boxes = BoxTensor(
+            torch.stack([
+                torch.stack((box.z, box.Z)) for _label, box in searcher.y_boxes.items() if (args.target == 'x' or label != _label)
+            ])
+        )
+
+        (scores, indices) = searcher.search(
             target, k,
             all_boxes,
-            include_pruning_history=True
+            include_pruning_history=False
         )  # alg: get top-k scores and indices of boxes
 
-        all_scores['label'].append(label)
-        all_scores['containment_history'].append(containment_history)
+        local_score_history['label'].append(label)
+        local_score_history['scores'].append(scores)
+        local_score_history['indices'].append(indices)
+        # all_scores['containment_history'].append(containment_history)
 
-        # volume = searcher.predictor._model._volume
-        volume = SoftVolume()
+        volume = searcher.predictor._model._volume
+        # volume = SoftVolume()
         intersec = searcher.predictor._model._intersect
 
         ground_truth = torch.topk(
@@ -364,69 +389,48 @@ def evaluate_search(
 
         ndcg = ndcg_score(true_rank_scores.unsqueeze(0), pred_rank_scores.unsqueeze(0))  # alg: compute ndcg using ranking scores
 
-        # overlap = predicted_mask == ground_truth_mask
         f1 = f1_score(true_mask, pred_mask)  # alg: compute f1
 
-        all_scores['f1'].append(f1)
-        all_scores['positive_overlap'].append(positive_overlap.item())
-        all_scores['ndcg'].append(ndcg)
-        all_scores['ap'].append(ap)
+        local_score_history['f1'].append(f1)
+        local_score_history['positive_overlap'].append(positive_overlap.item())
+        local_score_history['ndcg'].append(ndcg)
+        local_score_history['ap'].append(ap)
 
-    # all_scores_t = torch.stack(all_scores)
-    # print("\n", torch.mean(all_scores_t.float()))
-    # print(all_scores)
-    # for metric in all_scores:
-    #     print(metric, np.mean(all_scores[metric]))
+    return local_score_history
 
-    return all_scores
+args = None
 
 if __name__ == '__main__':
 
-    # searcher = BoxSearcherBase(
-    #     '/work/asempruch_umass_edu/box-mlc/models/nyt_bert',
-    #     name='Box Model',
-    # )
+    wandb.init()
 
-    # searcher = BoxSearcherBase(
-    #     '/gypsum/scratch1/asempruch/1750',
-    #     name='1750',
-    # )
+    # score_history = {}
+    score_keys = [
+        'f1',
+        # 'positive_overlap',
+        'ndcg',
+        'ap'
+    ]
 
-    # model = '1_dim'
-    # model = '5'
-    # model = '50'
-    # model = '1750'
-    # model = '5_distributed'
-    # model = '50_distributed'
-    # model = '1750_distributed'
-    # model = '50_sparsemax'
-    # model = '100_sparsemax'
+    # score_history_file = f'history/{"rev_var" if args.rev_var else ""}_{"dist" if args.dist else ""}_{time.strftime("%y%m%d_%H%M%S")}.pkl'
 
-    def evaluate(model):
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('model')
-    # args = parser.parse_args()
-    # model = args.model
+    def evaluate(model_name):
+        if not os.path.isdir(f'plots/{model_name}'):
+            os.mkdir(f'plots/{model_name}')
 
         searcher = BoxSearcherBase(
-            f'/work/asempruch_umass_edu/saved_models/{model}',
-            # f'/gypsum/scratch1/asempruch/{model}',
-            name=model,
+            f'/work/asempruch_umass_edu/saved_models/{model_name}',
+            name=model_name,
+            get_predictions=False,
         )
 
-        # searcher = BoxSearcherBase(
-        #     '/work/asempruch_umass_edu/saved_models/expr_FUN_distance_1_dims',
-        #     name='Box Model',
-        # )
+        if args.dist and not (hasattr(searcher.predictor._model, '_volume') and hasattr(searcher.predictor._model._volume, '_dimension_dist')):
+            logger.error(f"Model {model_name} not compatible for dimension distribution evaluation. Skipping")
+            return
 
-        k = min(int(np.ceil(int(model.split('_')[0])*0.2)), 50)
+        searcher.get_predictions()
 
-        all_boxes = BoxTensor(
-            torch.stack([
-                torch.stack((box.z, box.Z)) for box in searcher.y_boxes.values()
-            ])
-        )
+        k = min(int(np.ceil(int(model_name.split('_')[0]) * 0.2)), 50)
 
         results = dict()
 
@@ -435,44 +439,128 @@ if __name__ == '__main__':
 
             results[pruning_ratio] = evaluate_search(
                 searcher,
-                k, all_boxes
+                k
             )
 
-        # num_pruned = list()
+        score_file_name = f'scores/{searcher.name}_{args.target}_k{k}_{"sc" if args.strict_containment else "-"}_{"revvar" if args.rev_var else "-"}_{"dist" if args.dist else "-"}.pkl'
 
-        score_keys = [
-            'f1',
-            # 'positive_overlap',
-            'ndcg',
-            'ap'
-        ]
+        with open(score_file_name, 'wb') as f:
+            pickle.dump(results, f)
 
         avg_scores = {
             ratio : { score_key : np.mean(results[ratio][score_key]) for score_key in score_keys } for ratio in results.keys()
         }
 
+        dimensionality = searcher.total_dims
+        model_type = model_name.split('_')[-1]
+
+        # if dimensionality not in score_history:
+        #     score_history[dimensionality] = {}
+        # if model_type not in score_history[dimensionality]:
+        #     score_history[dimensionality][model_type] = {}
+
+        # score_history_entry = score_history[dimensionality][model_type]
+
         for score_key in score_keys:
-            plt.plot(avg_scores.keys(), [scores[score_key] for scores in avg_scores.values()])
-            plt.title(f'{searcher.name} - {score_key} k={k}')
+            # if score_key not in score_history_entry:
+            #     score_history_entry[score_key] = []
+            x = avg_scores.keys()
+            y = [scores[score_key] for scores in avg_scores.values()]
+            # score_history_entry[score_key] = (x, y)
+            plt.scatter(x, y)
+            plt.title(f'{searcher.name} - {score_key} k={k} {"rev_var" if args.rev_var else ""} {"dist" if args.dist else ""}')
+            plt.ylim(0, 1)
+            plt.xlabel('pruning threshold')
+            plt.savefig(f'plots/{searcher.name}/{searcher.name}_{score_key}_k{k}_{"rev_var" if args.rev_var else ""}_{"dist" if args.dist else ""}.jpg')
             plt.show()
+            plt.clf()
 
-        avg_pruning_steps = {
-            ratio: np.mean([len(containment_history) for containment_history in results[ratio]['containment_history']]) for ratio in results
-        }
+        # with open(score_history_file, mode='w') as f:
+        #     pickle.dump(score_history, f)
 
-        plt.plot(list(avg_pruning_steps.keys()), avg_pruning_steps.values())
-        plt.title(f"{searcher.name} - Avg pruning steps for pruning threshold")
-        plt.show()
+        # avg_pruning_steps = {
+        #     ratio: np.mean([len(containment_history) for containment_history in results[ratio]['containment_history']]) for ratio in results
+        # }
+        #
+        # plt.scatter(list(avg_pruning_steps.keys()), avg_pruning_steps.values())
+        # plt.title(f"{searcher.name} - Avg pruning steps for pruning threshold")
+        # plt.savefig(f'plots/{searcher.name}/{searcher.name}_{"rev_var" if args.rev_var else ""}_{"dist" if args.dist else ""}_avg_pruning_steps.jpg')
+        # plt.show()
+        # plt.clf()
 
-        if hasattr(searcher.predictor._model, 'dimension_dist'):
-            plt.plot(searcher.predictor._model.dimension_dist.detach().numpy())
+        if hasattr(searcher.predictor._model, '_volume')\
+                and hasattr(searcher.predictor._model._volume, '_dimension_dist'):
+            regularizer = searcher.predictor._model._volume.regularizer
+            regularized_dist = regularizer(searcher.predictor._model._volume._dimension_dist).detach().numpy()
+
+            if not os.path.isdir('dist_vectors'):
+                os.mkdir('dist_vectors')
+
+            dist_vector_file_name = f'dist_vectors/{searcher.name}_distvec.pkl'
+            with open(dist_vector_file_name, 'wb') as f:
+                pickle.dump(regularized_dist, f)
+
+            plt.plot(range(regularized_dist.shape[0]), regularized_dist)
             plt.title(f"{searcher.name} - dimension vector")
+            plt.xlabel('dim')
+            plt.ylabel('weight')
+            plt.savefig(f"plots/{searcher.name}/{searcher.name}_dimension_vector.jpg")
             plt.show()
+            plt.clf()
+        del searcher
 
-    evaluate('1000_dist1')
+    # for model in ['5_dist1', '10_dist1', '50_dist1', '500_dist1', '5_softmax', '10_softmax', '50_softmax', '100_softmax', '500_softmax', '5_sparsemax', '10_sparsemax', '50_sparsemax']:
+    #     evaluate(model)
+    dir = '/work/asempruch_umass_edu/saved_models'
+    start_time = time.time()
+    # evaluate('1000_q2b5')
 
-    for model in ['5_dist1', '10_dist1', '50_dist1', '500_dist1', '5_softmax', '10_softmax', '50_softmax', '100_softmax', '500_softmax', '5_sparsemax', '10_sparsemax', '50_sparsemax']:
-        evaluate(model)
+    models = args.models or reversed(os.listdir(dir))
+
+    for model in models:
+        if not args.force and os.path.isdir(f'plots/{model}'):
+            logger.info(f"Skipping model {model} as it already has a plot directory")
+            continue
+        if not args.models and args.newer:
+            mtime = os.stat(os.path.join(dir, model)).st_mtime
+            hours_since_mod = (start_time - mtime) / 3600
+            if hours_since_mod > args.newer:
+                logger.debug("skipping model:", model)
+                continue
+        logger.debug("evaluating model:", model)
+        try:
+            with torch.no_grad():
+                evaluate(model)
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            wandb.log({'exception': e})
+            logger.error(f"failed to evaluate model: {model}")
+            # logger.error(e)
+            raise e
+
+    # if not os.path.isdir('plots/all'):
+    #     os.mkdir('plots/all')
+
+    # for dimensionality in score_history:
+    #     fig_dir = f'plots/all/{time.strftime("%y%m%d_%H%M%S")}'
+    #     if not os.path.isdir(fig_dir):
+    #         os.mkdir(fig_dir)
+    #
+    #     for score_key in score_keys:
+    #         for model_type in score_history[dimensionality]:
+    #             scores = score_history[dimensionality][model_type]
+    #             plt.scatter(scores[score_key][0], scores[score_key][1], label=model_type)
+    #         plt.title(f'{dimensionality} - {score_key} {"rev_var" if args.rev_var else ""} {"dist" if args.dist else ""}')
+    #         plt.ylim(0, 1)
+    #         plt.legend()
+    #         plt.xlabel('pruning threshold')
+    #         if not os.path.isdir(f'{fig_dir}/{dimensionality}'):
+    #             os.mkdir(f'{fig_dir}/{dimensionality}')
+    #         plt.savefig(f'{fig_dir}/{dimensionality}/{score_key}_{"rev_var" if args.rev_var else ""}_{"dist" if args.dist else ""}.jpg')
+    #         plt.show()
+    #         plt.clf()
+
 
     # avg_boxes_pruned = {
     #     ratio: np.mean([torch.logical_not(containment_history).sum() for containment_history in results[ratio]['containment_history']]) for ratio in results
